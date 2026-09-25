@@ -29,7 +29,7 @@ RUN npm ci
 # Copy source code
 COPY frontend/ .
 
-# Build frontend (使用 server/public 作为 publicDir，与上方 COPY 一致)
+# Build frontend（publicDir 是 frontend/public，见 vite.config.ts；产物出到 /app/frontend/dist）
 ENV TAILWIND_DISABLE_NATIVE=1
 ENV VITE_DOCKER_BUILD=1
 RUN npm run build-only
