@@ -31,12 +31,36 @@ export const useConfigStore = defineStore("config", () => {
   const updateCheckLastAt = useStorage<number>("flat-nas-update-check-last-at", 0);
   const UPDATE_CHECK_TTL = 30 * 60 * 1000;
 
+  // 把 "1.2.7" / "v1.2.7" / "1.2.7-beta.1" 这类版本串拆成数字数组，用于真正的大小比较
+  const parseVersion = (raw: string): number[] =>
+    String(raw)
+      .trim()
+      .replace(/^v/i, "")
+      .split("-")[0]
+      .split(".")
+      .map((part) => {
+        const n = Number.parseInt(part, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+
+  // 只有「远端版本确实高于本机」才算有更新。
+  // 旧写法是字符串不等（v1 !== v2），只要两边写法不同就会一直误报。
+  const isNewerVersion = (remote: string, local: string): boolean => {
+    const a = parseVersion(remote);
+    const b = parseVersion(local);
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i += 1) {
+      const x = a[i] ?? 0;
+      const y = b[i] ?? 0;
+      if (x !== y) return x > y;
+    }
+    return false;
+  };
+
   const hasUpdate = computed(() => {
     if (dockerUpdateAvailable.value) return true;
     if (!latestVersion.value) return false;
-    const v1 = currentVersion.replace(/^v/, "");
-    const v2 = latestVersion.value.replace(/^v/, "");
-    return v1 !== v2;
+    return isNewerVersion(latestVersion.value, currentVersion);
   });
 
   // Resource version for cache busting
@@ -158,11 +182,18 @@ export const useConfigStore = defineStore("config", () => {
 
       if (shouldCheckRemote) {
         updateCheckLastAt.value = now;
-        const res = await fetch("https://gitee.com/api/v5/repos/gjx0808/FlatNas/tags");
+        // 只查本 fork 自己的「最新 Release」。
+        // 原代码查的是上游作者在 Gitee 上的 tags（gjx0808/FlatNas），
+        // 对本 fork 没有意义（上游任意 tag 都会被判成"有更新"），已改掉。
+        // 本仓库尚未发过 Release 时该接口返回 404，这里静默跳过，不会误报。
+        const res = await fetch(
+          "https://api.github.com/repos/aaron2024S/FlatNas/releases/latest",
+          { headers: { Accept: "application/vnd.github+json" } },
+        );
         if (res.ok) {
           const data = await res.json();
-          if (data.length > 0) {
-            latestVersion.value = data[0].name;
+          if (data?.tag_name) {
+            latestVersion.value = String(data.tag_name);
           }
         }
       }

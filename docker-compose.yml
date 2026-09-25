@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   flatnas:
-    image: qdnas/flatnas:latest
+    image: aaron2024s/flatnas:latest # 本仓库自己构建的镜像（GitHub Actions → docker-build-push 产出）
     container_name: flatnas
     restart: unless-stopped
     ports:
