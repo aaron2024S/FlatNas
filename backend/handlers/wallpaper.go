@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"flatnasgo-backend/config"
 	"fmt"
 	"io"
@@ -11,119 +10,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
-
-type assetMetaEntry struct {
-	Owner *string `json:"owner"`
-}
-
-type assetMetaStore struct {
-	Music             map[string]assetMetaEntry `json:"music"`
-	Backgrounds       map[string]assetMetaEntry `json:"backgrounds"`
-	MobileBackgrounds map[string]assetMetaEntry `json:"mobileBackgrounds"`
-}
-
-var assetMetaMu sync.Mutex
-
-func assetMetaFilePath() string {
-	return filepath.Join(config.DataDir, "asset_meta.json")
-}
-
-func ensureAssetMetaMaps(store *assetMetaStore) {
-	if store.Music == nil {
-		store.Music = map[string]assetMetaEntry{}
-	}
-	if store.Backgrounds == nil {
-		store.Backgrounds = map[string]assetMetaEntry{}
-	}
-	if store.MobileBackgrounds == nil {
-		store.MobileBackgrounds = map[string]assetMetaEntry{}
-	}
-}
-
-func loadAssetMetaStoreUnlocked() (assetMetaStore, error) {
-	store := assetMetaStore{
-		Music:             map[string]assetMetaEntry{},
-		Backgrounds:       map[string]assetMetaEntry{},
-		MobileBackgrounds: map[string]assetMetaEntry{},
-	}
-	data, err := os.ReadFile(assetMetaFilePath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return store, nil
-		}
-		return store, err
-	}
-	if len(data) == 0 {
-		return store, nil
-	}
-	if err := json.Unmarshal(data, &store); err != nil {
-		return store, err
-	}
-	ensureAssetMetaMaps(&store)
-	return store, nil
-}
-
-func saveAssetMetaStoreUnlocked(store assetMetaStore) error {
-	ensureAssetMetaMaps(&store)
-	data, err := json.MarshalIndent(store, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(assetMetaFilePath(), data, 0644)
-}
-
-func normalizeAssetKey(raw string) string {
-	return strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"), "/")
-}
-
-func canAccessOwnedAsset(owner *string, username string) bool {
-	if owner == nil {
-		return true
-	}
-	trimmed := strings.TrimSpace(*owner)
-	if trimmed == "" {
-		return true
-	}
-	return username != "" && trimmed == username
-}
-
-func isSupportedWallpaperFile(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") ||
-		strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".gif") ||
-		strings.HasSuffix(lower, ".webp") || strings.HasSuffix(lower, ".svg")
-}
-
-func syncWallpaperMetaWithDir(store map[string]assetMetaEntry, dir string) (bool, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	changed := false
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !isSupportedWallpaperFile(name) {
-			continue
-		}
-		key := normalizeAssetKey(name)
-		if _, ok := store[key]; !ok {
-			store[key] = assetMetaEntry{Owner: nil}
-			changed = true
-		}
-	}
-	return changed, nil
-}
 
 type WallpaperResolveRequest struct {
 	URL string `json:"url"`
@@ -249,23 +139,6 @@ func FetchWallpaper(c *gin.Context) {
 	}
 
 	webPath := fmt.Sprintf("%s/%s", urlPrefix, filename)
-	assetMetaMu.Lock()
-	store, metaErr := loadAssetMetaStoreUnlocked()
-	if metaErr == nil {
-		owner := username
-		entry := assetMetaEntry{Owner: &owner}
-		if req.Type == "mobile" {
-			store.MobileBackgrounds[normalizeAssetKey(filename)] = entry
-		} else {
-			store.Backgrounds[normalizeAssetKey(filename)] = entry
-		}
-		metaErr = saveAssetMetaStoreUnlocked(store)
-	}
-	assetMetaMu.Unlock()
-	if metaErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save wallpaper metadata"})
-		return
-	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "path": webPath, "filename": filename})
 }
 
@@ -278,38 +151,11 @@ func ListMobileBackgrounds(c *gin.Context) {
 }
 
 func listBackgrounds(c *gin.Context, dir string) {
-	username := c.GetString("username")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		c.JSON(http.StatusOK, []string{})
 		return
 	}
-
-	assetMetaMu.Lock()
-	store, metaErr := loadAssetMetaStoreUnlocked()
-	if metaErr != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, []string{})
-		return
-	}
-	targetMeta := store.Backgrounds
-	if dir == config.MobileBackgroundsDir {
-		targetMeta = store.MobileBackgrounds
-	}
-	changed, syncErr := syncWallpaperMetaWithDir(targetMeta, dir)
-	if syncErr != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, []string{})
-		return
-	}
-	if changed {
-		if err := saveAssetMetaStoreUnlocked(store); err != nil {
-			assetMetaMu.Unlock()
-			c.JSON(http.StatusInternalServerError, []string{})
-			return
-		}
-	}
-	assetMetaMu.Unlock()
 
 	var fileInfos []os.FileInfo
 	for _, entry := range entries {
@@ -329,14 +175,11 @@ func listBackgrounds(c *gin.Context, dir string) {
 	var names []string
 	for _, info := range fileInfos {
 		name := info.Name()
-		if isSupportedWallpaperFile(name) {
-			entry, ok := targetMeta[normalizeAssetKey(name)]
-			if !ok {
-				entry = assetMetaEntry{Owner: nil}
-			}
-			if canAccessOwnedAsset(entry.Owner, username) {
-				names = append(names, name)
-			}
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") ||
+			strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".gif") ||
+			strings.HasSuffix(lower, ".webp") || strings.HasSuffix(lower, ".svg") {
+			names = append(names, name)
 		}
 	}
 	c.JSON(http.StatusOK, names)
@@ -369,30 +212,11 @@ func deleteBackground(c *gin.Context, dir string) {
 		return
 	}
 
-	assetMetaMu.Lock()
-	store, metaErr := loadAssetMetaStoreUnlocked()
-	if metaErr != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load metadata"})
-		return
-	}
-	targetMeta := store.Backgrounds
-	if dir == config.MobileBackgroundsDir {
-		targetMeta = store.MobileBackgrounds
-	}
-	changed, syncErr := syncWallpaperMetaWithDir(targetMeta, dir)
-	if syncErr != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to sync metadata"})
-		return
-	}
-	entry, ok := targetMeta[normalizeAssetKey(name)]
-	if !ok {
-		entry = assetMetaEntry{Owner: nil}
-	}
+	// Admin can delete anything. Users can only delete their own (files containing their username)
 	if username != "admin" {
-		if entry.Owner == nil || strings.TrimSpace(*entry.Owner) == "" || strings.TrimSpace(*entry.Owner) != username {
-			assetMetaMu.Unlock()
+		// Heuristic check based on filename format: prefix_username_timestamp.ext
+		// We check if "_username_" exists in the filename.
+		if !strings.Contains(name, "_"+username+"_") {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
 			return
 		}
@@ -400,19 +224,9 @@ func deleteBackground(c *gin.Context, dir string) {
 
 	path := filepath.Join(dir, name)
 	if err := os.Remove(path); err != nil {
-		assetMetaMu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete"})
 		return
 	}
-	delete(targetMeta, normalizeAssetKey(name))
-	if changed || true {
-		if err := saveAssetMetaStoreUnlocked(store); err != nil {
-			assetMetaMu.Unlock()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save metadata"})
-			return
-		}
-	}
-	assetMetaMu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
@@ -427,8 +241,7 @@ func UploadMobileBackground(c *gin.Context) {
 func uploadBackground(c *gin.Context, dir string, webPrefix string) {
 	form, err := c.MultipartForm()
 	if err != nil {
-		fmt.Printf("[UploadBackground] MultipartForm error: %v\n", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Bad Request", "detail": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Bad Request"})
 		return
 	}
 
@@ -437,60 +250,18 @@ func uploadBackground(c *gin.Context, dir string, webPrefix string) {
 		Path     string `json:"path"`
 	}
 	var uploaded []UploadedFile
-	username := c.GetString("username")
-	if username == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
 
 	files := form.File["files"]
-	assetMetaMu.Lock()
-	store, metaErr := loadAssetMetaStoreUnlocked()
-	if metaErr != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load metadata"})
-		return
-	}
-	targetMeta := store.Backgrounds
-	if dir == config.MobileBackgroundsDir {
-		targetMeta = store.MobileBackgrounds
-	}
-	// Step 1: validate all files before touching disk (avoid partial writes)
 	for _, file := range files {
-		if !isSupportedWallpaperFile(file.Filename) {
-			assetMetaMu.Unlock()
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf(
-				"Unsupported file type: %s (supported: jpg, jpeg, png, gif, webp, svg)",
-				file.Filename,
-			)})
-			return
-		}
-	}
-	for i, file := range files {
-		ext := strings.ToLower(filepath.Ext(file.Filename))
-		ts := time.Now().UnixMilli()
-		suffix := ""
-		if i > 0 {
-			suffix = fmt.Sprintf("_%d", i)
-		}
-		filename := fmt.Sprintf("custom_%d%s%s", ts, suffix, ext)
+		filename := filepath.Base(file.Filename)
 		if err := c.SaveUploadedFile(file, filepath.Join(dir, filename)); err != nil {
-			assetMetaMu.Unlock()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save " + filename})
 			return
 		}
-		owner := username
-		targetMeta[normalizeAssetKey(filename)] = assetMetaEntry{Owner: &owner}
 		uploaded = append(uploaded, UploadedFile{
 			Filename: filename,
 			Path:     fmt.Sprintf("%s/%s", webPrefix, filename),
 		})
 	}
-	if err := saveAssetMetaStoreUnlocked(store); err != nil {
-		assetMetaMu.Unlock()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save metadata"})
-		return
-	}
-	assetMetaMu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"success": true, "files": uploaded})
 }

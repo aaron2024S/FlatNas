@@ -158,9 +158,28 @@ go/
 docs/
 .cursor
 .fnsync_temp_dir
-.github
+# ⚠️ .github 本来是被忽略的（上游也是这么写的），但那样本仓库新加的
+#    GitHub Actions 工作流就提交不上去，所以这里去掉这一行。
+#    上游虽然也写了 .github，但它那几个 workflow 是很早就提交进去的，
+#    gitignore 对「已被跟踪的文件」不生效 —— 我们是从零提交，不适用。
+# .github
 .vscode
-.zcode
-.qodo
-gui-test-screenshots
 LOG.md
+
+# ============================================================================
+# 以下为本地副本（aaron2024S）新增，上游没有这些目录 —— 2026-09-25
+# ============================================================================
+
+# 本机离线打包环境：gopath 模块缓存 + 离线构建脚本，850MB，绝对不能提交
+offline/
+
+# WorkBuddy / Edge 预览留下的临时浏览器数据（浏览器扩展缓存），27MB
+.workbuddy/
+
+# 构建输出目录。
+# frontend/vite.config.ts 的注释写得很清楚：
+#   「frontend/public 是静态素材源目录；server/public 是构建输出目录，
+#     Windows 本地构建会被 emptyOutDir 清空后重写；不要再把 server/public
+#     当作素材源目录，否则执行构建时素材会被误覆盖。」
+# 所以素材源（frontend/public）进仓库，构建输出（server/public）不进。
+server/public/

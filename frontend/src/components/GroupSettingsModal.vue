@@ -59,7 +59,27 @@ const handleReset = () => {
   }
 };
 
-const handleBatchPublish = () => {
+// 公开/不公开是「一次性批量设置」：把组内所有卡片的 isPublic 一并改掉并立即保存。
+// 公开页的显示以单个卡片的 isPublic 为准（后端 /api/data 访客过滤只看卡片字段），
+// 组本身的 isPublic 不参与过滤；批量之后每张卡片仍可在编辑卡片里单独改。
+const publicCount = computed(
+  () => (group.value?.items || []).filter((i) => i.isPublic).length,
+);
+const totalCount = computed(() => (group.value?.items || []).length);
+
+const persistBatch = async (failPrefix: string) => {
+  store.markDirty();
+  try {
+    const result = await store.saveData(true);
+    if (result === "conflict" || result === "unauthorized") {
+      alert(`${failPrefix}，但保存失败：${result === "conflict" ? "发生版本冲突" : "未授权或登录已过期"}`);
+    }
+  } catch {
+    alert(`${failPrefix}，但保存失败，请检查网络后重试`);
+  }
+};
+
+const handleBatchPublish = async () => {
   if (!group.value) return;
 
   const updates: Partial<NavGroup> = { isPublic: true };
@@ -71,16 +91,22 @@ const handleBatchPublish = () => {
     updates.items = newItems;
   }
   updateGroup(updates);
+  await persistBatch("已批量设为公开");
 };
 
-const handleBatchUnpublish = () => {
-  if (!group.value || !group.value.items) return;
+const handleBatchUnpublish = async () => {
+  if (!group.value) return;
 
-  const newItems = group.value.items.map((item) => ({
-    ...item,
-    isPublic: false,
-  }));
-  updateGroup({ isPublic: false, items: newItems });
+  const updates: Partial<NavGroup> = { isPublic: false };
+  if (group.value.items) {
+    const newItems = group.value.items.map((item) => ({
+      ...item,
+      isPublic: false,
+    }));
+    updates.items = newItems;
+  }
+  updateGroup(updates);
+  await persistBatch("已批量设为不公开");
 };
 
 // --- Color Helper ---
@@ -179,8 +205,14 @@ const bgAlpha = computed({
             class="flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-100"
           >
             <div class="flex flex-col">
-              <span class="text-xs font-bold text-gray-700">公开此分组（一次性执行）</span>
-              <span class="text-[10px] text-gray-400">允许未登录访客查看此分组内容</span>
+              <span class="text-xs font-bold text-gray-700">批量设置公开（对组内所有卡片生效）</span>
+              <span class="text-[10px] text-gray-400">一次性把组内卡片全部设为公开/不公开；之后每个卡片仍可单独修改，以卡片设置为准</span>
+              <span
+                class="text-[10px] mt-1 font-bold"
+                :class="totalCount > 0 && publicCount === totalCount ? 'text-green-600' : 'text-gray-500'"
+              >
+                当前：{{ publicCount }}/{{ totalCount }} 张卡片公开
+              </span>
             </div>
             <div class="flex gap-2">
               <button

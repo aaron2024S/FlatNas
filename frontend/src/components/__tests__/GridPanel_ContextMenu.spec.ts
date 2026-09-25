@@ -86,7 +86,6 @@ describe('GridPanel Context Menu', () => {
           AmapWeatherWidget: true,
           RssWidget: true,
           DockerWidget: true,
-          SystemStatusWidget: true,
           CustomCssWidget: true,
           FileTransferWidget: true,
           IconShape: true,

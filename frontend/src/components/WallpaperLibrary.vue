@@ -112,23 +112,8 @@ const setWallpaper = (name: string, type: "pc" | "mobile") => {
   const url = getWallpaperPath(name, type);
   if (type === "pc") {
     store.appConfig.background = url;
-    // 手动选择本地壁纸时，关闭 API 自动更新调度器（避免覆盖用户选择）
-    if (store.appConfig.wallpaperConfig?.enabled) {
-      store.appConfig.wallpaperConfig = {
-        ...store.appConfig.wallpaperConfig,
-        enabled: false,
-      };
-      store.markDirty();
-    }
   } else {
     store.appConfig.mobileBackground = url;
-    if (store.appConfig.mobileWallpaperConfig?.enabled) {
-      store.appConfig.mobileWallpaperConfig = {
-        ...store.appConfig.mobileWallpaperConfig,
-        enabled: false,
-      };
-      store.markDirty();
-    }
   }
   return true;
 };
@@ -336,25 +321,8 @@ const executeDelete = async (name: string, type: "pc" | "mobile") => {
   if (url === currentBg) {
     // Reset to default
     const defaultUrl = getWallpaperPath(DEFAULT_WALLPAPER, type);
-    if (type === "pc") {
-      store.appConfig.background = defaultUrl;
-      // 删除当前壁纸并回退到默认时，同时停用 API 自动更新避免立即被覆盖
-      if (store.appConfig.wallpaperConfig?.enabled) {
-        store.appConfig.wallpaperConfig = {
-          ...store.appConfig.wallpaperConfig,
-          enabled: false,
-        };
-      }
-    } else {
-      store.appConfig.mobileBackground = defaultUrl;
-      if (store.appConfig.mobileWallpaperConfig?.enabled) {
-        store.appConfig.mobileWallpaperConfig = {
-          ...store.appConfig.mobileWallpaperConfig,
-          enabled: false,
-        };
-      }
-    }
-    store.markDirty();
+    if (type === "pc") store.appConfig.background = defaultUrl;
+    else store.appConfig.mobileBackground = defaultUrl;
   }
 
   const base =
@@ -621,9 +589,39 @@ const applyCustomApi = async (type: "pc" | "mobile", apply: boolean = true) => {
   const sourceUrl = customApiUrl.value.trim() || currentGeneratorUrl.value;
   if (!sourceUrl) return;
 
+  // 应用为壁纸：直接保存 API 地址，打开网页时实时拉取，不下载到服务器本地。
+  if (apply) {
+    applyingApi.value = true;
+    try {
+      const preset = presetApis.find(
+        (p) => p.url === currentGeneratorUrl.value || p.url === sourceUrl,
+      );
+      const enableAutoUpdate = preset ? preset.autoUpdate : false;
+      const config = {
+        type: "api" as const,
+        url: sourceUrl,
+        enabled: enableAutoUpdate,
+        lastUpdated: Date.now(),
+      };
+
+      if (type === "pc") {
+        store.appConfig.background = sourceUrl;
+        store.appConfig.wallpaperConfig = config;
+      } else {
+        store.appConfig.mobileBackground = sourceUrl;
+        store.appConfig.mobileWallpaperConfig = config;
+      }
+      store.markDirty();
+      alert("设置成功：壁纸将在每次打开网页时从 API 实时获取");
+    } finally {
+      applyingApi.value = false;
+    }
+    return;
+  }
+
+  // 保存到壁纸库：仍然下载图片并上传到服务器
   applyingApi.value = true;
   try {
-    let backgroundPath = "";
     let uploadedFilename = "";
 
     const getPreviewBlob = async () => {
@@ -701,10 +699,6 @@ const applyCustomApi = async (type: "pc" | "mobile", apply: boolean = true) => {
     const blob = await getPreviewBlob();
 
     if (blob) {
-      if (apply && type === "pc") {
-        document.body.style.backgroundImage = `url(${previewDisplayUrl.value || sourceUrl})`;
-      }
-
       const formData = new FormData();
       // Generate filename based on type and timestamp
       const ext = inferImageExtension(
@@ -727,7 +721,6 @@ const applyCustomApi = async (type: "pc" | "mobile", apply: boolean = true) => {
       if (uploadRes.ok) {
         const uploadData = await uploadRes.json();
         if (uploadData.success && uploadData.files && uploadData.files.length > 0) {
-          backgroundPath = uploadData.files[0].path;
           uploadedFilename = uploadData.files[0].filename || "";
         } else {
           throw new Error("Upload failed: No path returned");
@@ -739,65 +732,19 @@ const applyCustomApi = async (type: "pc" | "mobile", apply: boolean = true) => {
       throw new Error("No preview image available");
     }
 
-    // Now apply configuration
-    if (apply) {
-      const preset = presetApis.find(
-        (p) => p.url === currentGeneratorUrl.value || p.url === sourceUrl,
-      );
-      const enableScheduler = preset ? preset.autoUpdate : false;
-      const urlToSave = enableScheduler ? (currentGeneratorUrl.value || sourceUrl) : backgroundPath;
-
-      const config = {
-        type: "api" as const,
-        url: urlToSave,
-        enabled: !!enableScheduler,
-        lastUpdated: Date.now(),
-      };
-
-      if (type === "pc") {
-        store.appConfig.background = backgroundPath; // Use the server path
-        store.appConfig.wallpaperConfig = config;
-      } else { 
-        store.appConfig.mobileBackground = backgroundPath;
-        store.appConfig.mobileWallpaperConfig = config;
-      }
-      // 记录 API 自动设置的路径，使 useWallpaperRotation 能识别用户后续是否手动切换
-      if (enableScheduler && backgroundPath) {
-        try {
-          const key =
-            type === "pc"
-              ? "flatnas_wallpaper_last_api_path_pc"
-              : "flatnas_wallpaper_last_api_path_mobile";
-          localStorage.setItem(key, backgroundPath);
-        } catch {
-          // ignore
-        }
-      }
-      if (uploadedFilename) {
-        prependWallpaperToList(uploadedFilename, type);
-      }
-      store.refreshResources();
-      store.markDirty();
-      alert("设置成功");
-    } else {
-      if (uploadedFilename) {
-        prependWallpaperToList(uploadedFilename, type);
-      }
-      await fetchWallpapers();
-      if (uploadedFilename) {
-        prependWallpaperToList(uploadedFilename, type);
-      }
-      store.refreshResources();
-      activeTab.value = type;
-      alert(type === "pc" ? "已保存到 PC 壁纸库" : "已保存到手机壁纸库");
+    if (uploadedFilename) {
+      prependWallpaperToList(uploadedFilename, type);
     }
+    await fetchWallpapers();
+    if (uploadedFilename) {
+      prependWallpaperToList(uploadedFilename, type);
+    }
+    store.refreshResources();
+    activeTab.value = type;
+    alert(type === "pc" ? "已保存到 PC 壁纸库" : "已保存到手机壁纸库");
   } catch (e) {
     console.error(e);
     alert("请求出错，请检查网络");
-    // Fallback logic as requested: "Failure -> Default icon"
-    if (type === "pc") {
-      store.appConfig.background = `/${DEFAULT_WALLPAPER}`;
-    }
   } finally {
     applyingApi.value = false;
   }
@@ -805,11 +752,15 @@ const applyCustomApi = async (type: "pc" | "mobile", apply: boolean = true) => {
 
 onMounted(() => {
   fetchWallpapers();
-  if (store.appConfig.background?.startsWith("http")) {
-    previewSourceUrl.value = store.appConfig.background;
-    customApiUrl.value = store.appConfig.background;
-    previewResolvedUrl.value = store.appConfig.background;
-    setPreviewUrl(store.appConfig.background);
+  // 回填当前生效的 API 地址（优先取壁纸配置中保存的 API，其次是直接的 http 壁纸地址）
+  const configUrl = store.appConfig.wallpaperConfig?.url || "";
+  const bg = store.appConfig.background || "";
+  const initialApiUrl = configUrl || (bg.startsWith("http") ? bg : "");
+  if (initialApiUrl) {
+    previewSourceUrl.value = initialApiUrl;
+    customApiUrl.value = initialApiUrl;
+    previewResolvedUrl.value = initialApiUrl;
+    setPreviewUrl(initialApiUrl);
   }
 });
 

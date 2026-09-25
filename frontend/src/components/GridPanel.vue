@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ref,
+  reactive,
   onMounted,
   onUnmounted,
   computed,
@@ -13,11 +14,10 @@ import {
 } from "vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { GridLayout, GridItem } from "grid-layout-plus";
-import { useStorage, useWindowSize, useIntervalFn } from "@vueuse/core";
+import { useStorage, useWindowSize, useIntervalFn, onClickOutside } from "@vueuse/core";
 import { useMainStore } from "../stores/main";
 import { useWallpaperRotation } from "../composables/useWallpaperRotation";
 import { useDevice } from "../composables/useDevice";
-import { useIconPreloader } from "../composables/useIconPreloader";
 import { generateLayout, type GridLayoutItem } from "../utils/gridLayout";
 import type { NavItem, WidgetConfig, NavGroup } from "@/types";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
@@ -75,7 +75,8 @@ const AppSidebar = loadAsync(() => import("./AppSidebar.vue"));
 const CountdownWidget = loadAsync(() => import("./CountdownWidget.vue"));
 const CountUpWidget = loadAsync(() => import("./CountUpWidget.vue"));
 const DockerWidget = loadAsync(() => import("./DockerWidget.vue"));
-const SystemStatusWidget = loadAsync(() => import("./SystemStatusWidget.vue"));
+const SystemStatCard = loadAsync(() => import("./SystemStatCard.vue"));
+const SystemStatEditModal = loadAsync(() => import("./SystemStatEditModal.vue"));
 const CustomCssWidget = loadAsync(() => import("./CustomCssWidget.vue"));
 const AmapWeatherWidget = loadAsync(() => import("./AmapWeatherWidget.vue"));
 const FileTransferWidget = loadAsync(() => import("./FileTransferWidget.vue"));
@@ -105,7 +106,6 @@ const gridWidgetTypes = new Set([
   "amap-weather",
   "rss",
   "docker",
-  "system-status",
   "custom-css",
   "file-transfer",
 ]);
@@ -439,6 +439,9 @@ watch(showGroupSettingsModal, (val) => {
   } else if (wasEditing) {
     store.markDirty();
     store.layoutEditInProgress = false;
+    // 关闭分组设置时立即落盘：分组内的改动（标题/颜色/批量公开等）只改了 store，
+    // 之前仅 markDirty 不触发保存，导致"批量公开/不公开"看似无效。
+    void store.saveData(true);
   }
 });
 const isLanMode = ref(false);
@@ -497,18 +500,12 @@ const toggleForceMode = () => {
   else forceMode.value = "auto";
 };
 
-const searchEngineStored = useStorage("flat-nas-engine", "google");
+const searchEngineStored = useStorage("flat-nas-engine", "bing");
+// 内置引擎默认只带 Bing；Google/百度等由用户在 设置 → 搜索引擎设置 里自行添加
 const engines = computed(
   () =>
     store.appConfig.searchEngines || [
-      {
-        id: "google",
-        key: "google",
-        label: "Google",
-        urlTemplate: "https://www.google.com/search?q={q}",
-      },
       { id: "bing", key: "bing", label: "Bing", urlTemplate: "https://cn.bing.com/search?q={q}" },
-      { id: "baidu", key: "baidu", label: "百度", urlTemplate: "https://www.baidu.com/s?wd={q}" },
     ],
 );
 const sessionEngine = ref<string | null>(null);
@@ -517,7 +514,7 @@ const effectiveEngine = computed({
     sessionEngine.value ||
     (store.appConfig.rememberLastEngine
       ? searchEngineStored.value
-      : store.appConfig.defaultSearchEngine || engines.value[0]?.key || "google"),
+      : store.appConfig.defaultSearchEngine || engines.value[0]?.key || "bing"),
   set: (val: string) => {
     sessionEngine.value = val;
     if (store.appConfig.rememberLastEngine) {
@@ -527,6 +524,48 @@ const effectiveEngine = computed({
 });
 const searchText = ref("");
 const searchInputRef = ref<HTMLInputElement | null>(null);
+// 搜索结果是否用新窗口打开（持久化，默认勾选）
+const searchOpenInNewTab = useStorage("flat-nas-search-newtab", true);
+// 引擎切换 / 新窗口开关的弹层：默认隐藏，点搜索框左侧的引擎图标才弹出，
+// 点弹层外任意位置自动收起（onClickOutside 挂在整个搜索容器上）。
+const showSearchPanel = ref(false);
+const searchAreaRef = ref<HTMLElement | null>(null);
+onClickOutside(searchAreaRef, () => {
+  showSearchPanel.value = false;
+});
+// 加载失败的引擎图标（favicon 取不到时回退为首字母）
+const failedFavicons = reactive(new Set<string>());
+
+// 从 urlTemplate 里解析出主机名，用站点自己的 favicon.ico 当引擎图标
+// （google/bing/baidu 的 favicon.ico 都是其品牌图标，与参考样式一致）
+const engineHostOf = (tpl: string) => {
+  try {
+    return new URL(tpl.replace("{q}", "x")).hostname;
+  } catch {
+    return "";
+  }
+};
+const engineFavicon = (e: { urlTemplate: string }) => {
+  const h = engineHostOf(e.urlTemplate);
+  return h ? `https://${h}/favicon.ico` : "";
+};
+const currentEngine = computed(() =>
+  engines.value.find((e) => e.key === effectiveEngine.value),
+);
+
+// 已知引擎的内联品牌图标：favicon.ico 依赖访问引擎站点本身
+// （google.com 在国内网络不可达，会开天窗），内置的 SVG 永远可靠。
+const GOOGLE_G_SVG =
+  '<svg viewBox="0 0 24 24" style="width:100%;height:100%"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>';
+const BING_B_SVG =
+  '<svg viewBox="0 0 24 24" style="width:100%;height:100%"><path fill="#008373" d="M5 3v16.5l4.67 2.75 8.9-5.28v-3.9l-6.53-2.44 2.6 3.72-5.02 2.7V6.75L5 3z"/><path fill="#37c1ab" d="M5 3l4.67 3.75v4.66L5 8.9V3z" opacity=".85"/></svg>';
+const BAIDU_PAW_SVG =
+  '<svg viewBox="0 0 24 24" style="width:100%;height:100%"><path fill="#2932E1" d="M9.11 8.35c.78-.17 1.34-.94 1.24-1.76L10 3.9c-.1-.86-.83-1.5-1.65-1.42-.83.08-1.42.85-1.32 1.71l.35 2.7c.1.82.9 1.44 1.73 1.46zM14.06 8.5c.86 0 1.6-.68 1.68-1.5l.24-2.68c.08-.86-.53-1.62-1.36-1.68-.83-.07-1.55.57-1.63 1.43l-.24 2.68c-.08.85.48 1.6 1.31 1.75zM18.9 10.35c.74.38 1.65.1 2.05-.62l1.3-2.36c.42-.76.14-1.7-.6-2.1-.75-.4-1.66-.1-2.07.65l-1.3 2.36c-.4.74-.12 1.68.62 2.07zM6.32 9.4c.7-.44.93-1.37.5-2.1l-1.3-2.28c-.44-.72-1.37-.96-2.1-.52-.73.43-.97 1.36-.53 2.09l1.3 2.28c.44.73 1.4.97 2.13.53zM17.6 15.53c-.5-.57-2.36-1.98-3.4-2.9-1.03-.92-2.5-2.5-3.28-2.5-.78 0-2.24 1.57-3.28 2.5-1.03.92-2.9 2.33-3.4 2.9-.5.57-.9 1.4-.63 2.28.27.88 1.1 1.34 1.94 1.34h10.74c.84 0 1.67-.46 1.94-1.34.27-.88-.13-1.71-.63-2.28z"/></svg>';
+const engineSvgMap: Record<string, string> = {
+  google: GOOGLE_G_SVG,
+  bing: BING_B_SVG,
+  baidu: BAIDU_PAW_SVG,
+};
 
 const hexToRgb = (hex: string) => {
   let h = hex.trim();
@@ -600,11 +639,26 @@ const processIcon = (iconStr: string) => {
 const isPcBgLoaded = ref(false);
 const isMobileBgLoaded = ref(false);
 
+// 外部 API 壁纸（如 Bing 每日壁纸）按天追加缓存参数：
+// 每次打开网页都会拉取当天最新图片，同时同一天内可命中浏览器缓存。
+const resolveWallpaperUrl = (raw: string, type: "pc" | "mobile") => {
+  const url = store.getAssetUrl(raw);
+  if (!/^https?:\/\//i.test(url)) return url;
+  const cfg =
+    type === "pc" ? store.appConfig.wallpaperConfig : store.appConfig.mobileWallpaperConfig;
+  if (cfg?.enabled !== true || !cfg.url || !/^https?:\/\//i.test(cfg.url)) return url;
+  const now = new Date();
+  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  return `${url}${url.includes("?") ? "&" : "?"}d=${day}`;
+};
+
 const pcBgUrl = computed(() =>
-  store.appConfig.background ? store.getAssetUrl(store.appConfig.background) : "",
+  store.appConfig.background ? resolveWallpaperUrl(store.appConfig.background, "pc") : "",
 );
 const mobileBgUrl = computed(() =>
-  store.appConfig.mobileBackground ? store.getAssetUrl(store.appConfig.mobileBackground) : "",
+  store.appConfig.mobileBackground
+    ? resolveWallpaperUrl(store.appConfig.mobileBackground, "mobile")
+    : "",
 );
 
 watch(
@@ -984,6 +1038,8 @@ const displayGroups = computed(() => {
       }),
     }))
     .filter((g) => {
+      // 分组级 hideOnMobile：移动端整组隐藏（编辑模式提前返回不受影响，便于找回开关）
+      if (isMobile.value && g.hideOnMobile) return false;
       if (store.isLogged) return true;
       return g.items.length > 0 || !!g.preset;
     });
@@ -1360,51 +1416,35 @@ watch(
   { immediate: true },
 );
 
-// --- 图标预加载：首次数据加载完成后，缓存远程图标到本地 ---
-const iconPreloader = useIconPreloader();
-let iconPreloadDone = false;
-watch(
-  () => [store.isClientReady, store.items, store.widgets] as const,
-  ([ready, items, widgets]) => {
-    if (!ready || iconPreloadDone) return;
-    const allItems = [
-      ...items,
-      // 也收集 widgets 中的数据（如 bookmarks 子项）
-      ...widgets.flatMap((w) => {
-        if (!w.data || !Array.isArray(w.data)) return [];
-        return w.data.flatMap((entry: unknown) => {
-          if (entry && typeof entry === "object" && Array.isArray((entry as Record<string, unknown>).children)) {
-            return ((entry as Record<string, unknown>).children as NavItem[]) || [];
-          }
-          return [];
-        });
-      }),
-    ];
-    if (allItems.length === 0) return;
-    iconPreloadDone = true;
-    // 异步预加载，不阻塞 UI 渲染
-    iconPreloader.preloadIcons(items, widgets).then(() => {
-      // 将已缓存的图标路径回写到 items
-      const replaced = iconPreloader.applyCachedIcons(items);
-      if (replaced > 0) {
-        // 响应式更新：强制 Vue 重新渲染
-        store.markDirty();
-      }
-    });
-  },
-  { immediate: true },
-);
-
 const doSearch = () => {
   if (!searchText.value) return;
   const eng = engines.value.find((e) => e.key === effectiveEngine.value);
-  const template = eng?.urlTemplate || "https://www.google.com/search?q={q}";
+  const template = eng?.urlTemplate || "https://cn.bing.com/search?q={q}";
   const url = template.replace("{q}", encodeURIComponent(searchText.value));
-  window.open(url, "_blank");
+  if (searchOpenInNewTab.value) {
+    window.open(url, "_blank");
+  } else {
+    window.location.href = url;
+  }
   searchText.value = "";
 };
 
 const openAddModal = (groupId: string) => {
+  // 系统状态分组："+" 直接新建 CPU/内存/磁盘状态卡（默认磁盘类型）
+  const group = store.groups.find((g) => g.id === groupId);
+  if (group && isSysStatGroup(group)) {
+    sysStatCreateGroupId.value = groupId;
+    sysStatEditItem.value = {
+      id: "",
+      title: "磁盘",
+      url: "",
+      icon: "",
+      isPublic: true,
+      sysStat: { kind: "disk" },
+    };
+    showSysStatEditModal.value = true;
+    return;
+  }
   currentEditItem.value = null;
   currentGroupId.value = groupId;
   showEditModal.value = true;
@@ -1605,6 +1645,8 @@ const handleCardClick = (item: NavItem) => {
     return;
   }
   if (isEditMode.value) return;
+  // 系统状态卡片（CPU/内存/磁盘）：不可点击跳转，编辑走右键菜单
+  if (item.sysStat) return;
 
   // 逻辑优化：
   // 1. 默认使用外网链接 (item.url)
@@ -2017,6 +2059,7 @@ const fetchContainerStatuses = async () => {
           let stats = c.stats;
 
           if (stats && stats.netIO && stats.blockIO) {
+            // 正常路径：后端返回的是累计值，与上次差分算出速率
             const prev = previousStatsMap.value[c.Id];
             const currentNetRx = stats.netIO.rx || 0;
             const currentNetTx = stats.netIO.tx || 0;
@@ -2049,6 +2092,10 @@ const fetchContainerStatuses = async () => {
               netIO: { rx: rxRate, tx: txRate },
               blockIO: { read: readRate, write: writeRate },
             };
+          } else if (!stats) {
+            // 后端本次响应没带 stats（异步采集未完成/失败）：沿用上一次的数据，
+            // 避免卡片先闪 CPU:-- RAM:-- 再等下一轮才恢复（2026-09-18）
+            stats = containerStatuses.value[c.Id]?.stats;
           }
 
           statusMap[c.Id] = {
@@ -2367,9 +2414,50 @@ const handleMenuOpen = (url: string | { url: string }) => {
   window.open(target, "_blank");
 };
 
+// 系统状态卡片编辑弹窗
+const showSysStatEditModal = ref(false);
+const sysStatEditItem = ref<NavItem | null>(null);
+// 非空表示处于"新建卡片"模式：值为目标分组 id
+const sysStatCreateGroupId = ref<string | null>(null);
+
+const handleSysStatSave = async (payload: {
+  item: NavItem;
+  sysStat: NavItem["sysStat"];
+  isPublic?: boolean;
+}) => {
+  if (!payload.sysStat) return;
+  const isPublic = payload.isPublic ?? payload.item.isPublic ?? true;
+  if (sysStatCreateGroupId.value) {
+    // 新建：把卡片加进系统状态分组
+    const gid = sysStatCreateGroupId.value;
+    sysStatCreateGroupId.value = null;
+    store.addItem({ ...payload.item, id: Date.now().toString(), sysStat: payload.sysStat, isPublic }, gid);
+  } else {
+    store.updateItem({ ...payload.item, sysStat: payload.sysStat, isPublic });
+  }
+  try {
+    const result = await store.saveData(true);
+    if (result === "conflict" || result === "unauthorized") {
+      alert(`保存失败：${result === "conflict" ? "发生版本冲突" : "未授权或登录已过期"}`);
+    }
+  } catch {
+    alert("保存失败，请重试");
+  }
+};
+
+// 弹窗关闭时清掉新建模式标记
+const handleSysStatModalClose = (v: boolean) => {
+  showSysStatEditModal.value = v;
+  if (!v) sysStatCreateGroupId.value = null;
+};
+
 const handleMenuEdit = () => {
-  if (contextMenuItem.value) {
-    openEditModal(contextMenuItem.value, contextMenuGroupId.value);
+  const item = contextMenuItem.value;
+  if (item?.sysStat) {
+    sysStatEditItem.value = item;
+    showSysStatEditModal.value = true;
+  } else if (item) {
+    openEditModal(item, contextMenuGroupId.value);
   }
   closeContextMenu();
 };
@@ -2459,11 +2547,37 @@ const onGroupDragEnd = (evt: any) => {
   }
 };
 
+// 横向卡片的最小宽度基准（原为 220）。
+// 电脑端把行列间距放大到 2 倍后，若基准仍是 220，同一宽度下每行能放的卡片数会变少、
+// 每张卡片反而被 1fr 撑得更宽，右侧留出一大片空白。收窄到 196 后可维持每行的卡片数量，
+// 卡片宽度回到 ~200px，内容基本填满卡片。
+// 手机端不受影响：≤768px 由样式块 §6 强制两列，minWidth 不参与计算。
+const H_CARD_MIN_WIDTH_BASE = 196;
+
+// 系统状态分组：全部由 CPU/内存/磁盘卡组成。
+// 这类分组强制按"横向卡片"计算布局（宽度轨道/高度/间距都和普通横向卡片一致），
+// 不再受全局竖版布局、全局"无卡片背景"缩放（×0.6）影响——
+// 之前系统状态卡显示得又窄又矮，就是因为分组继承了这些全局设置。
+const isSysStatGroup = (group: NavGroup) =>
+  group.items.length > 0 && group.items.every((it) => !!it.sysStat);
+
+const isHorizontalGroup = (group: NavGroup) =>
+  isSysStatGroup(group) || (group.cardLayout || store.appConfig.cardLayout) === "horizontal";
+
+// 卡片容器背景：系统状态卡自定义了 bgColor 时直接用该色（单层，
+// 避免"普通卡白底 + 内层深色"叠加出更黑的层）；其余走普通卡背景链。
+const cardBackgroundColor = (group: NavGroup, item: NavItem) => {
+  if ((group.showCardBackground ?? store.appConfig.showCardBackground) === false) {
+    return "transparent";
+  }
+  if (item.sysStat?.bgColor) return item.sysStat.bgColor;
+  return group.cardBgColor || store.appConfig.cardBgColor || "var(--card-bg-color)";
+};
+
 const getLayoutConfig = (group: NavGroup) => {
   const showBg = group.showCardBackground ?? store.appConfig.showCardBackground;
-  const layout = group.cardLayout || store.appConfig.cardLayout;
-  const isHorizontal = layout === "horizontal";
-  const isNoBg = showBg === false;
+  const isHorizontal = isHorizontalGroup(group);
+  const isNoBg = isSysStatGroup(group) ? false : showBg === false;
 
   const baseGap = group.gridGap || store.appConfig.gridGap;
   const gap = isNoBg ? Math.max(4, Math.round(baseGap * 0.6)) : baseGap;
@@ -2503,7 +2617,7 @@ const getLayoutConfig = (group: NavGroup) => {
     if (minH > v_h) v_h = minH;
   }
 
-  const h_w = 220 * finalScale;
+  const h_w = H_CARD_MIN_WIDTH_BASE * finalScale;
   const h_h = 80 * finalScale;
 
   return {
@@ -2932,7 +3046,7 @@ onUnmounted(() => {
         :class="(store.appConfig.enableMobileWallpaper ?? true) ? 'hidden md:block' : 'block'"
         v-if="store.appConfig.background"
         :style="{
-          backgroundImage: `url('${store.getAssetUrl(store.appConfig.background)}')`,
+          backgroundImage: `url('${pcBgUrl}')`,
           filter: `blur(${store.appConfig.backgroundBlur ?? 0}px)`,
           opacity: isPcBgLoaded ? 1 : 0,
           transition: 'opacity 0.5s ease-in-out, filter 0.3s ease-in-out',
@@ -3128,13 +3242,15 @@ onUnmounted(() => {
           <div
             v-if="checkVisible(store.widgets.find((w) => w.id === 'w5'))"
             class="w-full xl:absolute xl:left-1/2 xl:-translate-x-1/2 z-50 transition-all duration-300"
-            :class="isWideLayout ? 'xl:w-[32rem]' : 'xl:w-64'"
+            ref="searchAreaRef"
+            :class="isWideLayout ? 'xl:w-[27rem]' : 'xl:w-60'"
           >
+            <!-- ① 胶囊搜索框：左=当前引擎图标，右=放大镜提交 -->
             <form
-              class="mx-auto shadow-lg hover:shadow-xl transition-shadow rounded-full bg-white/90 backdrop-blur-md border border-white/40 flex items-center p-1 flatnas-search-form"
+              class="mx-auto shadow-lg hover:shadow-xl transition-shadow rounded-full bg-white/90 backdrop-blur-md border border-white/40 flex items-center p-1.5 flatnas-search-form"
               :style="{
                 width: '100%',
-                height: '41px',
+                height: '46px',
                 backgroundColor: `rgba(255, 255, 255, ${searchBgAlpha})`,
                 '--flatnas-search-text-color': searchTextColor,
                 '--flatnas-search-placeholder-color': searchPlaceholderColor,
@@ -3142,6 +3258,30 @@ onUnmounted(() => {
               @submit.prevent="doSearch"
               action="."
             >
+              <button
+                type="button"
+                class="w-9 h-9 ml-0.5 mr-2 flex items-center justify-center rounded-full bg-white border border-gray-100 shadow-sm flex-shrink-0 hover:shadow transition-shadow"
+                :title="currentEngine ? `搜索引擎：${currentEngine.label}（点击切换）` : '搜索'"
+                aria-label="切换搜索引擎"
+                @click.stop="showSearchPanel = !showSearchPanel"
+                @mousedown.stop
+              >
+                <img
+                  v-if="currentEngine && engineFavicon(currentEngine) && !failedFavicons.has(currentEngine.key)"
+                  :src="engineFavicon(currentEngine)"
+                  class="w-5 h-5"
+                  alt=""
+                  @error="currentEngine && failedFavicons.add(currentEngine.key)"
+                />
+                <span
+                  v-else-if="currentEngine && engineSvgMap[currentEngine.key]"
+                  class="w-5 h-5 block"
+                  v-html="engineSvgMap[currentEngine.key]"
+                />
+                <span v-else class="text-sm font-bold text-gray-500">
+                  {{ currentEngine?.label?.charAt(0) || "搜" }}
+                </span>
+              </button>
               <input
                 ref="searchInputRef"
                 id="main-search-input"
@@ -3154,24 +3294,101 @@ onUnmounted(() => {
                 aria-label="搜索框"
                 autocomplete="off"
                 autofocus
-                class="h-full pl-6 pr-4 rounded-full bg-transparent border-0 outline-none flatnas-search-input"
-                :style="{ width: 'calc(100% - 33.75%)' }"
-                :placeholder="
-                  (engines.find((e) => e.key === effectiveEngine)?.label || '搜索') + ' 搜索...'
-                "
+                class="h-full flex-1 min-w-0 pl-1 pr-3 bg-transparent border-0 outline-none flatnas-search-input text-[15px]"
+                placeholder="请输入搜索内容"
               />
-              <div class="flex items-center justify-end" :style="{ width: '33.75%' }">
-                <select
-                  v-model="effectiveEngine"
-                  aria-label="搜索引擎"
-                  class="h-[34px] px-3 py-0 bg-transparent rounded-full border border-gray-200 focus:border-blue-400 outline-none flatnas-search-select"
-                  :style="{ width: 'calc(100%)', fontSize: '15px' }"
-                  @click.stop
+              <button
+                type="submit"
+                class="w-9 h-9 mr-0.5 flex items-center justify-center rounded-full flex-shrink-0 text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                aria-label="搜索"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="2"
+                  stroke="currentColor"
+                  class="w-5 h-5"
                 >
-                  <option v-for="e in engines" :key="e.key" :value="e.key">{{ e.label }}</option>
-                </select>
-              </div>
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+                  />
+                </svg>
+              </button>
             </form>
+
+            <!-- ② 弹层：引擎快捷切换 + 新窗口开关
+                 默认隐藏，点搜索框左侧的引擎图标（showSearchPanel）才显示；
+                 绝对定位挂在搜索框正下方（不占文档流，不会把搜索栏顶动），左对齐搜索栏；
+                 点弹层外由 onClickOutside 收起。 -->
+            <div
+              v-show="showSearchPanel"
+              class="absolute top-full left-0 mt-2 z-50 w-fit max-w-full rounded-2xl bg-white/90 backdrop-blur-md border border-white/40 shadow-lg px-3 py-2.5"
+              @mousedown.stop
+            >
+              <div class="flex items-center gap-2">
+                <button
+                  v-for="e in engines"
+                  :key="e.key"
+                  type="button"
+                  class="w-9 h-9 rounded-xl bg-white border border-gray-100 shadow-md flex items-center justify-center transition-all hover:scale-105 hover:shadow-lg flex-shrink-0"
+                  :class="effectiveEngine === e.key ? 'ring-2 ring-blue-400 opacity-100' : 'opacity-90'"
+                  :title="e.label"
+                  :aria-label="`切换到 ${e.label}`"
+                  @click.stop="effectiveEngine = e.key"
+                >
+                  <span
+                    v-if="engineSvgMap[e.key]"
+                    class="w-5 h-5 block"
+                    v-html="engineSvgMap[e.key]"
+                  />
+                  <img
+                    v-else-if="engineFavicon(e) && !failedFavicons.has(e.key)"
+                    :src="engineFavicon(e)"
+                    class="w-5 h-5"
+                    alt=""
+                    @error="failedFavicons.add(e.key)"
+                  />
+                  <span v-else class="text-sm font-bold text-gray-500">{{ e.label.charAt(0) }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="w-9 h-9 rounded-xl bg-white border border-gray-100 shadow-md flex items-center justify-center transition-all hover:scale-105 hover:shadow-lg flex-shrink-0 text-gray-500 hover:text-gray-700"
+                  title="搜索引擎设置"
+                  aria-label="搜索引擎设置"
+                  @click.stop="openSettings"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    class="w-5 h-5"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567l-.091.549a.798.798 0 01-.517.608 7.45 7.45 0 00-.478.198.798.798 0 01-.796-.064l-.453-.324a1.875 1.875 0 00-2.416.2l-.043.044a1.875 1.875 0 00-.204 2.416l.325.454a.798.798 0 01.064.796 7.448 7.448 0 00-.198.478.798.798 0 01-.608.517l-.55.092a1.875 1.875 0 00-1.566 1.849v.044c0 .917.663 1.699 1.567 1.85l.549.091c.281.047.508.25.608.517.06.162.127.321.198.478a.798.798 0 01-.064.796l-.324.453a1.875 1.875 0 00.2 2.416l.044.043a1.875 1.875 0 002.416.204l.454-.325a.798.798 0 01.796-.064c.157.071.316.137.478.198.267.1.47.327.517.608l.092.55c.15.903.932 1.566 1.849 1.566h.044c.917 0 1.699-.663 1.85-1.567l.091-.549a.798.798 0 01.517-.608 7.52 7.52 0 00.478-.198.798.798 0 01.796.064l.453.324a1.875 1.875 0 002.416-.2l.043-.044a1.875 1.875 0 00.204-2.416l-.325-.454a.798.798 0 01-.064-.796c.071-.157.137-.316.198-.478.1-.267.327-.47.608-.517l.55-.092a1.875 1.875 0 001.566-1.849v-.044c0-.917-.663-1.699-1.567-1.85l-.549-.091a.798.798 0 01-.608-.517 7.507 7.507 0 00-.198-.478.798.798 0 01.064-.796l.324-.453a1.875 1.875 0 00-.2-2.416l-.044-.043a1.875 1.875 0 00-2.416-.204l-.454.325a.798.798 0 01-.796.064 7.462 7.462 0 00-.478-.198.798.798 0 01-.517-.608l-.092-.55a1.875 1.875 0 00-1.849-1.566h-.044zM12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- 新窗口打开开关（在弹层内，白底上用深色文字） -->
+              <label
+                class="flex items-center gap-1.5 mt-2 mx-auto w-fit text-xs font-medium text-gray-700 cursor-pointer select-none"
+                title="关闭后将在当前窗口打开搜索结果"
+                @mousedown.stop
+              >
+                <input
+                  type="checkbox"
+                  v-model="searchOpenInNewTab"
+                  class="w-4 h-4 accent-green-600 cursor-pointer flex-shrink-0"
+                />
+                搜索结果使用新窗口打开
+              </label>
+            </div>
           </div>
 
           <div
@@ -3506,7 +3723,6 @@ onUnmounted(() => {
             <AmapWeatherWidget v-else-if="widget.type === 'amap-weather'" :widget="widget" />
             <RssWidget v-else-if="widget.type === 'rss'" :widget="widget" />
             <DockerWidget v-else-if="widget.type === 'docker'" :widget="widget" />
-            <SystemStatusWidget v-else-if="widget.type === 'system-status'" :widget="widget" />
             <CustomCssWidget v-else-if="widget.type === 'custom-css'" :widget="widget" />
             <FileTransferWidget v-else-if="widget.type === 'file-transfer'" :widget="widget" />
           </GridItem>
@@ -3659,6 +3875,8 @@ onUnmounted(() => {
               "
               :style="{
                 gap: getLayoutConfig(group).gap + 'px',
+                // 暴露给下方样式块 §7 用：电脑端要在此基础上 ×2，手机端保持原值
+                '--grid-gap': getLayoutConfig(group).gap + 'px',
                 gridTemplateColumns: `repeat(auto-fill, minmax(${getLayoutConfig(group).minWidth}px, 1fr))`,
               }"
               ghostClass="ghost"
@@ -3683,7 +3901,7 @@ onUnmounted(() => {
                     ? 'opacity-50 pointer-events-none !cursor-not-allowed animate-pulse ring-2 ring-yellow-400'
                     : '',
                   isEditMode ? 'animate-pulse cursor-move ring-2 ring-blue-400' : '',
-                  (group.cardLayout || store.appConfig.cardLayout) === 'horizontal'
+                  isHorizontalGroup(group)
                     ? 'flex-row px-4 py-3 gap-3 justify-start'
                     : 'flex-col justify-center',
                   (group.iconShape || store.appConfig.iconShape) === 'circle'
@@ -3706,10 +3924,7 @@ onUnmounted(() => {
                 ]"
                 :style="{
                   height: getLayoutConfig(group).height + 'px',
-                  backgroundColor:
-                    (group.showCardBackground ?? store.appConfig.showCardBackground) === false
-                      ? 'transparent'
-                      : group.cardBgColor || store.appConfig.cardBgColor || 'var(--card-bg-color)',
+                  backgroundColor: cardBackgroundColor(group, item),
                   borderColor:
                     (group.showCardBackground ?? store.appConfig.showCardBackground) === false
                       ? 'transparent'
@@ -3762,67 +3977,6 @@ onUnmounted(() => {
                     ></div>
                   </div>
 
-                  <!-- CPU Bar (Top, Right to Left) -->
-                  <div class="absolute top-0 right-0 w-full h-1/2 bg-transparent opacity-20">
-                    <div
-                      class="absolute top-0 right-0 h-full bg-blue-500 transition-all duration-1000 ease-out"
-                      :style="{
-                        width:
-                          Math.min(
-                            100,
-                            Math.max(0, getContainerStatus(item)?.stats?.cpuPercent || 0),
-                          ) + '%',
-                      }"
-                    ></div>
-                  </div>
-                  <!-- CPU Label -->
-                  <div class="absolute top-1 right-4 opacity-40 select-none z-10">
-                    <svg
-                      class="w-8 h-8"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="8931"
-                    >
-                      <path
-                        d="M719.768116 237.449275H304.231884a59.362319 59.362319 0 0 0-59.362319 59.362319v415.536232a59.362319 59.362319 0 0 0 59.362319 59.362319h415.536232a59.362319 59.362319 0 0 0 59.362319-59.362319V296.811594a59.362319 59.362319 0 0 0-59.362319-59.362319z m0 474.898551H304.231884V296.811594h415.536232v415.536232z m267.130435-237.449275a29.681159 29.681159 0 0 0 0-59.362319h-103.884058v-89.043478h103.884058a29.681159 29.681159 0 0 0 0-59.362319h-103.884058v-50.265044A78.313739 78.313739 0 0 0 801.391304 133.565217H764.289855V29.681159a29.681159 29.681159 0 0 0-59.362319 0v103.884058h-89.043478V29.681159a29.681159 29.681159 0 0 0-59.362319 0v103.884058h-89.043478V29.681159a29.681159 29.681159 0 0 0-59.362319 0v103.884058h-37.101449C173.516058 133.565217 126.144928 167.698551 126.144928 216.865391V267.130435H37.101449a29.681159 29.681159 0 0 0 0 59.362319h89.043479v89.043478H37.101449a29.681159 29.681159 0 0 0 0 59.362319h89.043479v89.043478H37.101449a29.681159 29.681159 0 0 0 0 59.362319h89.043479v89.043478H37.101449a29.681159 29.681159 0 0 0 0 59.362319h89.043479v23.937855A100.826899 100.826899 0 0 0 222.608696 890.434783H259.710145v103.884058a29.681159 29.681159 0 0 0 59.362319 0v-103.884058h89.043478v103.884058a29.681159 29.681159 0 0 0 59.362319 0v-103.884058h89.043478v103.884058a29.681159 29.681159 0 0 0 59.362319 0v-103.884058h37.101449c49.092638 0 81.623188-45.694145 81.623189-94.786783V771.710145h103.884058a29.681159 29.681159 0 0 0 0-59.362319h-103.884058v-89.043478h103.884058a29.681159 29.681159 0 0 0 0-59.362319h-103.884058v-89.043478h103.884058zM823.652174 801.391304a29.681159 29.681159 0 0 1-29.68116 29.68116H215.188406a29.681159 29.681159 0 0 1-29.68116-29.68116V222.608696a29.681159 29.681159 0 0 1 29.68116-29.68116h578.782608a29.681159 29.681159 0 0 1 29.68116 29.68116v578.782608z"
-                        fill="#465975"
-                        p-id="8932"
-                      ></path>
-                    </svg>
-                  </div>
-
-                  <!-- Memory Bar (Bottom, Left to Right) -->
-                  <div class="absolute bottom-0 left-0 w-full h-1/2 bg-transparent opacity-20">
-                    <div
-                      class="absolute top-0 left-0 h-full bg-green-500 transition-all duration-1000 ease-out"
-                      :style="{
-                        width:
-                          Math.min(
-                            100,
-                            Math.max(0, getContainerStatus(item)?.stats?.memPercent || 0),
-                          ) + '%',
-                      }"
-                    ></div>
-                  </div>
-                  <!-- MEM Label -->
-                  <div
-                    class="absolute bottom-1 left-1/2 -translate-x-1/2 opacity-40 select-none z-10"
-                  >
-                    <svg
-                      class="w-8 h-8"
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      p-id="4800"
-                    >
-                      <path
-                        d="M85.333333 213.333333a42.666667 42.666667 0 0 0-42.666666 42.666667v384a42.666667 42.666667 0 0 0 42.666666 42.666667v85.333333a42.666667 42.666667 0 0 0 42.666667 42.666667h316.330667l42.666666-42.666667h50.005334l42.666666 42.666667H896a42.666667 42.666667 0 0 0 42.666667-42.666667v-85.333333a42.666667 42.666667 0 0 0 42.666666-42.666667V256a42.666667 42.666667 0 0 0-42.666666-42.666667H85.333333z m768 469.333334v42.666666h-238.336l-42.666666-42.666666H853.333333z m-401.664 0l-42.666666 42.666666H170.666667v-42.666666h281.002666zM128 597.333333V298.666667h768v298.666666H128z m85.333333-213.333333h85.333334v128H213.333333V384z m256 0H384v128h85.333333V384z m85.333334 0h85.333333v128h-85.333333V384z m256 0h-85.333334v128h85.333334V384z"
-                        fill="#465975"
-                        p-id="4801"
-                      ></path>
-                    </svg>
-                  </div>
                 </div>
 
                 <div
@@ -3831,10 +3985,16 @@ onUnmounted(() => {
                 >
                   公开
                 </div>
+                <div
+                  v-else-if="isEditMode"
+                  class="absolute bottom-1 right-1 text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded border border-gray-200 z-20"
+                >
+                  不公开
+                </div>
 
                 <div
                   class="relative flex items-center justify-center flex-shrink-0 transition-all duration-300 relative z-10"
-                  v-if="(group.iconShape || store.appConfig.iconShape) !== 'hidden'"
+                  v-if="!item.sysStat && (group.iconShape || store.appConfig.iconShape) !== 'hidden'"
                   :style="{
                     width: getLayoutConfig(group).iconSize + 'px',
                     height: getLayoutConfig(group).iconSize + 'px',
@@ -3921,17 +4081,30 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <!-- Horizontal Mode: 3-Line Custom Text -->
+                <!-- 系统状态卡片（宿主机状态组件生成的 CPU/内存/磁盘卡）
+                     背景由外层卡片容器提供（与普通卡片同一套），内部只有图标 + 标题 + 数值。 -->
+                <SystemStatCard
+                  v-if="item.sysStat"
+                  :item="item"
+                  :icon-size="getLayoutConfig(group).iconSize"
+                  :title-color="
+                    item.titleColor ||
+                    (item.backgroundImage || group.backgroundImage
+                      ? '#ffffff'
+                      : group.cardTitleColor || store.appConfig.cardTitleColor || '#111827')
+                  "
+                  class="w-full h-full relative z-10"
+                />
+
+                <!-- Horizontal Mode: 标题 + CPU/内存信息 + 单行描述（描述在状态行下方） -->
                 <div
-                  v-if="(group.cardLayout || store.appConfig.cardLayout) === 'horizontal'"
+                  v-else-if="isHorizontalGroup(group)"
                   class="flex-1 flex flex-col h-full justify-center gap-0.5 overflow-hidden relative z-10"
                 >
-                  <!-- Line 1 (Top) -->
+                  <!-- Line 1 (Top)：卡片标题 -->
                   <div
                     :class="[
-                      !item.description1 && !item.description2 && !item.description3
-                        ? 'text-left'
-                        : 'text-xs',
+                      item.description1 ? 'text-xs' : 'text-left',
                       'truncate font-medium leading-tight flex justify-between items-center',
                     ]"
                     :style="{
@@ -3945,17 +4118,18 @@ onUnmounted(() => {
                         item.backgroundImage || group.backgroundImage
                           ? '0 1px 2px rgba(0,0,0,0.8)'
                           : 'none',
-                      opacity:
-                        item.description1 || (!item.description2 && !item.description3) ? 1 : 0.5,
                     }"
                   >
-                    <span class="truncate flex-1">{{ item.description1 || item.title }}</span>
+                    <span class="truncate flex-1">{{ item.title }}</span>
                   </div>
 
-                  <!-- Docker Stats Info -->
+                  <!-- Docker Stats Info：纯文字显示 CPU / 内存占用（参考 sun-panel 样式）
+                       两个 span 分开写：电脑端同一行（沿用原样），手机端由样式块 §8 换成竖排两行，
+                       避免窄卡片里 RAM 被省略号截断。 -->
                   <div
                     v-if="getContainerStatus(item)"
-                    class="flex flex-col gap-0.5 text-[10px] mt-0.5 w-full opacity-90 leading-none font-mono"
+                    class="docker-stats-line text-[10px] mt-0.5 w-full opacity-90 leading-none font-mono truncate"
+                    title="CPU / 内存占用"
                     :style="{
                       color:
                         item.titleColor ||
@@ -3968,31 +4142,27 @@ onUnmounted(() => {
                           : 'none',
                     }"
                   >
-                    <div class="flex justify-between items-center" title="Network I/O (RX/TX)">
-                      <span class="font-bold opacity-70">NET</span>
-                      <span class="font-mono truncate ml-1">
-                        <template v-if="getContainerStatus(item)?.stats">
-                          ↓{{ formatBytes(getContainerStatus(item)?.stats?.netIO?.rx || 0, 0) }}/s
-                        </template>
-                        <template v-else>--</template>
-                      </span>
-                    </div>
-                    <div class="flex justify-between items-center" title="Block I/O (Read/Write)">
-                      <span class="font-bold opacity-70">IO</span>
-                      <span class="font-mono truncate ml-1">
-                        <template v-if="getContainerStatus(item)?.stats">
-                          R{{
-                            formatBytes(getContainerStatus(item)?.stats?.blockIO?.read || 0, 0)
-                          }}/s
-                        </template>
-                        <template v-else>--</template>
-                      </span>
-                    </div>
+                    <template v-if="getContainerStatus(item)?.stats">
+                      <span class="docker-stats-cpu"
+                        >CPU:{{
+                          (getContainerStatus(item)?.stats?.cpuPercent ?? 0).toFixed(1)
+                        }}%</span
+                      >
+                      <span class="docker-stats-ram"
+                        >RAM:{{ formatBytes(getContainerStatus(item)?.stats?.memUsage || 0, 1) }}</span
+                      >
+                    </template>
+                    <template v-else>
+                      <span class="docker-stats-cpu">CPU:--</span>
+                      <span class="docker-stats-ram">RAM:--</span>
+                    </template>
                   </div>
 
-                  <!-- Line 2 (Middle) -->
+                  <!-- Line 2 (Middle)：单行描述，显示在 CPU/内存信息下方
+                       （旧数据 description2/description3 不再渲染，仅保留字段兼容）
+                       手机端由样式块 §11 整体隐藏（那里 CPU/RAM 已竖排占两行）。 -->
                   <div
-                    class="text-[10px] truncate leading-tight opacity-80"
+                    class="card-desc-line text-[10px] truncate leading-tight opacity-80"
                     :style="{
                       color:
                         item.backgroundImage || group.backgroundImage
@@ -4004,24 +4174,7 @@ onUnmounted(() => {
                           : 'none',
                     }"
                   >
-                    {{ item.description2 || "" }}
-                  </div>
-
-                  <!-- Line 3 (Bottom) -->
-                  <div
-                    class="text-[10px] truncate leading-tight opacity-70"
-                    :style="{
-                      color:
-                        item.backgroundImage || group.backgroundImage
-                          ? '#d1d5db'
-                          : group.cardTitleColor || store.appConfig.cardTitleColor || '#6b7280',
-                      textShadow:
-                        item.backgroundImage || group.backgroundImage
-                          ? '0 1px 2px rgba(0,0,0,0.8)'
-                          : 'none',
-                    }"
-                  >
-                    {{ item.description3 || "" }}
+                    {{ item.description1 || "" }}
                   </div>
                 </div>
 
@@ -4175,6 +4328,14 @@ onUnmounted(() => {
       :groupId="currentGroupId"
       :onSave="handleSave"
     />
+    <SystemStatEditModal
+      v-if="showSysStatEditModal && sysStatEditItem"
+      :show="showSysStatEditModal"
+      :item="sysStatEditItem"
+      :create="!!sysStatCreateGroupId"
+      @update:show="handleSysStatModalClose"
+      @save="handleSysStatSave"
+    />
     <SettingsModal v-if="showSettingsModal" v-model:show="showSettingsModal" />
     <LoginModal v-if="showLoginModal" v-model:show="showLoginModal" />
 
@@ -4220,7 +4381,7 @@ onUnmounted(() => {
       </template>
 
       <div
-        v-if="contextMenuItem?.url"
+        v-if="contextMenuItem?.url && !contextMenuItem?.sysStat"
         @click="handleMenuWanOpen"
         class="px-4 py-2 hover:bg-blue-50 text-blue-700 cursor-pointer flex items-center gap-3 text-sm transition-colors border-b border-gray-100 truncate"
         role="menuitem"
@@ -4379,8 +4540,7 @@ onUnmounted(() => {
 .shadow-text {
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
 }
-.flatnas-search-input,
-.flatnas-search-select {
+.flatnas-search-input {
   color: var(--flatnas-search-text-color, #111827);
 }
 .flatnas-search-input::placeholder {
@@ -4606,5 +4766,139 @@ onUnmounted(() => {
 @keyframes fogFade {
   0% { opacity: 0.3; }
   100% { opacity: 0.7; }
+}
+</style>
+
+<style>
+/* ==================== 程序卡片内置优化（源自用户参考的"分组卡片优化.css"） ==================== */
+
+/* 1. 图标背景处理：去除 SVG 图标的底色填充，使图标更干净 */
+.group-container .grid svg [class*="transition-all"],
+.group-container .grid svg g > rect:first-child,
+.group-container .grid svg g > path:first-child {
+  fill: transparent !important;
+  opacity: 0 !important;
+  stroke: none !important;
+}
+
+/* 2. 横向卡片紧凑化：收窄左右内边距、缩小图标与文字间距、固定 64px 高度 */
+.group-container .grid > div.flex-row {
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  gap: 6px !important;
+  height: 64px !important;
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+
+/* 清除卡片内部元素的旧位移（防止冲突） */
+.group-container .grid > div.flex-row > div.flex-shrink-0,
+.group-container .grid > div.flex-row > div.flex-1 > div:first-child,
+.group-container .grid > div.flex-row > div.flex-1 > div:last-child {
+  transform: none !important;
+}
+
+/* 3. 分组标题右侧的 +号 / 设置按钮：默认隐藏，悬停标题栏时显示 */
+.group-header h2 + div {
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+  pointer-events: none !important;
+}
+
+.group-header:hover h2 + div {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* 4. 分组间与底部间距收紧 */
+.group-container {
+  padding-bottom: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.pb-20.flex.flex-col {
+  padding-bottom: 0 !important;
+}
+
+/* 5. 卡片（网格项）允许收缩到轨道宽度以内
+   ★ 实测踩坑：网格轨道用 1fr 时等价于 minmax(auto, 1fr)，**轨道最小宽度 =
+   卡片自身的最小内容宽度**。卡片里 CPU/RAM 那行是 font-mono 且不可断行，
+   实测把最小内容宽度顶到约 178px；手机两列每列只有 174px（390px 屏 - 32px 内边距），
+   于是每列被硬撑到 178px、两列总宽 366px，右侧那一列被挤出屏幕 8px。
+   给网格项 min-width:0，轨道才能按容器宽度收窄，文字交给 truncate 省略。 */
+.group-container .grid > div {
+  min-width: 0 !important;
+}
+.group-container .grid > div.flex-row > div.flex-1 {
+  min-width: 0 !important;
+}
+
+/* 6. 移动端适配：小屏两列布局 */
+@media (max-width: 768px) {
+  .group-container .grid {
+    /* 必须是 minmax(0, 1fr)：下限写 0 才能真正等分铺满；
+       写 1fr 会在内容较宽时把列顶出屏幕（表现为最右一列露出屏幕外）。 */
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
+}
+
+/* 7. 电脑端：行列间距放大到设置值的 2 倍
+   --grid-gap 由模板的行内样式写入（= 设置里的行列间距）。
+   只在 >768px 生效，手机端不命中，仍用 §6 里的 10px。
+   （试过 ×3，观感偏空旷，×2 刚好。） */
+@media (min-width: 769px) {
+  .group-container .grid {
+    gap: calc(var(--grid-gap, 8px) * 2) !important;
+  }
+}
+
+/* 8. 手机端：CPU / RAM 竖排两行
+   窄卡片里 "CPU:x% RAM:y" 一行放不下，RAM 会被 truncate 截成 "RAM:22.1 M…"。
+   改成竖排后两个 span 各占一行；桌面端不受影响，仍是同一行。 */
+@media (max-width: 768px) {
+  .group-container .grid .docker-stats-line {
+    display: flex !important;
+    flex-direction: column !important;
+    /* 覆盖 truncate 的 nowrap：竖排下要让每行自然显示 */
+    white-space: normal !important;
+    overflow: visible !important;
+    line-height: 1.3 !important;
+  }
+}
+
+/* 9. 电脑端：CPU / RAM 字号加大 + 两者之间留间距
+   模板里两个 span 之间的换行空白被 Vue 的 whitespace:condense 吃掉了，
+   电脑端同行时 "CPU:x%RAM:y" 会粘在一起；手机端是竖排，间距交给行高，
+   所以只对 >768px 生效。用 margin 而不是 flex gap，保住 truncate 的省略号行为。 */
+@media (min-width: 769px) {
+  .group-container .grid .docker-stats-line {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .group-container .grid .docker-stats-cpu {
+    margin-right: 6px;
+  }
+}
+
+/* 10. 系统状态卡片（CPU/内存/磁盘）：与普通横向卡片同高（64px）。
+   §2 靠 .flex-row 类命中，若分组布局数据异常导致类名缺失，
+   系统状态卡会掉回竖版高度（128px 基准），这里用 :has 兜底。 */
+.group-container .grid > div:has(> .sys-stat-card) {
+  height: 64px !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  gap: 6px !important;
+}
+
+/* 11. 手机端：隐藏横向卡片的描述行
+   §8 已把 CPU / RAM 拆成竖排两行，卡片里只剩标题 + 状态两行；
+   再塞一行描述会让 64px 卡片过于拥挤，故窄屏整体不显示描述。 */
+@media (max-width: 768px) {
+  .group-container .grid .card-desc-line {
+    display: none !important;
+  }
 }
 </style>

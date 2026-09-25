@@ -33,7 +33,8 @@ var statsCacheMu sync.RWMutex
 var statsCollectMu sync.Mutex
 var statsCollecting atomic.Bool
 var lastStatsCollect time.Time
-var statsTTL = 10 * time.Second
+// 配合前端 5s 轮询：TTL 必须 < 轮询周期，否则每次请求都命中旧缓存，卡片数字变化滞后
+var statsTTL = 4 * time.Second
 
 var updateCheckStop chan struct{}
 

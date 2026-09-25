@@ -7,7 +7,6 @@ IFS=$'\n\t'
 # 说明：
 #   本脚本基于 debian/deploy.sh 和 debian/manage.sh 整合优化而来。
 #   支持从 GitHub Releases 自动拉取最新版本进行一键部署。
-#   自动检测系统架构 (amd64/arm64)，下载对应的 flatnas-{arch}.zip。
 #   包含安全卸载和版本回滚功能。
 #
 # 使用方式：
@@ -18,23 +17,14 @@ IFS=$'\n\t'
 #      sudo ./deploy_debian.sh
 #
 # 前置要求：
-#   - 确保 GitHub 仓库 (Garry-QD/FlatNas) 发布了包含 flatnas-amd64.zip / flatnas-arm64.zip 的 Release。
-#   - zip 包应包含 flatnas-server 二进制和 server/public 目录。
+#   - 确保 GitHub 仓库 (Garry-QD/FlatNas) 发布了包含 release.zip 的 Release。
+#   - release.zip 应包含 flatnas-server 二进制和 server/public 目录。
 
 MODE="${1:-install}"
 
 # ==========================================
 # 基础配置与变量
 # ==========================================
-
-ARCH_RAW="$(uname -m)"
-case "${ARCH_RAW}" in
-  x86_64)  ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  armv7l)  ARCH="arm64" ;;
-  *)       ARCH="" ;;
-esac
-
 APP_NAME="flatnas"
 APP_USER="flatnas"
 SERVICE_NAME="flatnas"
@@ -307,7 +297,7 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://127.0.0.1:${backend_port};
+        proxy_pass http://127.0.0.1:${backend_port}/api/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -320,13 +310,13 @@ server {
     }
 
     location /socket.io/ {
-        proxy_pass http://127.0.0.1:${backend_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${backend_port}/socket.io/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 }
@@ -359,7 +349,7 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://127.0.0.1:${backend_port};
+        proxy_pass http://127.0.0.1:${backend_port}/api/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -372,13 +362,13 @@ server {
     }
 
     location /socket.io/ {
-        proxy_pass http://127.0.0.1:${backend_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${backend_port}/socket.io/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 }
@@ -524,14 +514,9 @@ backup_current() {
 install_flow() {
   require_root
   require_debian
-
-  if [ -z "${ARCH}" ]; then
-    fail_with_tip "不支持的系统架构: ${ARCH_RAW}" "目前仅支持 x86_64 (amd64) 和 aarch64/armv7l (arm64)"
-  fi
   
   echo "=============================="
   echo "   FlatNas 一键部署脚本"
-  echo "   架构: ${ARCH}"
   echo "=============================="
   
   # 1. 配置收集
@@ -568,12 +553,12 @@ install_flow() {
   # 注册清理函数，确保退出时删除临时目录
   trap 'rm -rf "${tmp_dir}"' EXIT
 
-  local download_url="https://github.com/Garry-QD/FlatNas/releases/latest/download/flatnas-${ARCH}.zip"
-  local zip_file="${tmp_dir}/flatnas-${ARCH}.zip"
+  local download_url="https://github.com/Garry-QD/FlatNas/releases/latest/download/release.zip"
+  local zip_file="${tmp_dir}/release.zip"
   
   log_info "下载: ${download_url}"
   if ! wget -O "${zip_file}" "${download_url}"; then
-    fail_with_tip "下载失败，请检查网络或确认 GitHub Release 是否存在 flatnas-${ARCH}.zip"
+    fail_with_tip "下载失败，请检查网络或确认 GitHub Release 是否存在 release.zip"
   fi
   
   log_info "解压资源..."
@@ -656,16 +641,6 @@ install_flow() {
   init_data_dir "PC" "${PC_DIR}" "${source_dir}"
   init_data_dir "APP" "${APP_DIR}" "${source_dir}"
   init_data_dir "doc" "${DOC_DIR}" "${source_dir}"
-  
-  if [ -z "$(ls -A "${PUBLIC_DIR}" 2>/dev/null)" ]; then
-    log_warn "前端静态目录为空，尝试从 ${static_src} 重新复制..."
-    if [ -d "${static_src}" ]; then
-      cp -a "${static_src}/." "${PUBLIC_DIR}/"
-      log_info "前端静态文件已补充复制"
-    else
-      log_warn "源目录 ${static_src} 不存在，前端可能无法正常访问"
-    fi
-  fi
   
   # 6. 设置权限
   log_info "设置权限..."

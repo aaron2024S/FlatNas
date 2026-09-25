@@ -58,15 +58,6 @@ export const useSaveStore = defineStore("save", () => {
   const jsonEqual = (left: unknown, right: unknown) =>
     JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 
-  // 排序键的 JSON.stringify，避免键序不同导致伪冲突
-  const stableStringify = (obj: unknown): string => {
-    if (obj === null || obj === undefined) return "null";
-    if (typeof obj !== "object") return JSON.stringify(obj);
-    if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
-    const sorted = Object.keys(obj as Record<string, unknown>).sort();
-    return "{" + sorted.map((k) => JSON.stringify(k) + ":" + stableStringify((obj as Record<string, unknown>)[k])).join(",") + "}";
-  };
-
   const saveData = async (
     immediate = false,
     force = false,
@@ -116,31 +107,31 @@ export const useSaveStore = defineStore("save", () => {
           return 60000;
         };
 
-        const MAX_SAVE_RETRIES = 3;
-        const SAVE_TIMEOUT_MS = getSaveTimeout();
-        let saveAttempt = 0;
-        let res: Response | null = null;
+    const MAX_SAVE_RETRIES = 3;
+    const SAVE_TIMEOUT_MS = getSaveTimeout();
+    let saveAttempt = 0;
+    let res: Response | null = null;
 
-        while (saveAttempt < MAX_SAVE_RETRIES) {
-          saveAttempt++;
-          try {
-            const controller = new AbortController();
-            const timeout = window.setTimeout(() => controller.abort(), SAVE_TIMEOUT_MS);
-            res = await fetch("/api/save", { method: "POST", headers: { ...cacheStore.getHeaders(), "Content-Encoding": "gzip" }, body: compressed, signal: controller.signal }).finally(() => window.clearTimeout(timeout));
-            if (res.ok || res.status === 409 || res.status === 401) break;
-            if (saveAttempt < MAX_SAVE_RETRIES) {
-              const delay = Math.min(1000 * Math.pow(2, saveAttempt - 1), 5000);
-              await new Promise((r) => setTimeout(r, delay));
-            }
-          } catch (e) {
-            if (e instanceof DOMException && e.name === "AbortError" && saveAttempt < MAX_SAVE_RETRIES) {
-              const delay = Math.min(1000 * Math.pow(2, saveAttempt - 1), 5000);
-              await new Promise((r) => setTimeout(r, delay));
-              continue;
-            }
-            throw e;
-          }
+    while (saveAttempt < MAX_SAVE_RETRIES) {
+      saveAttempt++;
+      try {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), SAVE_TIMEOUT_MS);
+        res = await fetch("/api/save", { method: "POST", headers: { ...cacheStore.getHeaders(), "Content-Encoding": "gzip" }, body: compressed, signal: controller.signal }).finally(() => window.clearTimeout(timeout));
+        if (res.ok || res.status === 409 || res.status === 401) break;
+        if (saveAttempt < MAX_SAVE_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, saveAttempt - 1), 5000);
+          await new Promise((r) => setTimeout(r, delay));
         }
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError" && saveAttempt < MAX_SAVE_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, saveAttempt - 1), 5000);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
+      }
+    }
 
         if (!res) throw new Error(`Save failed after ${MAX_SAVE_RETRIES} retries`);
 
@@ -183,87 +174,6 @@ export const useSaveStore = defineStore("save", () => {
                 dataVersion.value = v; await fetchData(); widgetsStore.updateLastSavedLayout(); return "saved";
               }
             } catch (e) { console.warn("Smart conflict check failed", e); }
-            // Per-widget LWW 合并：差异仅在个别 widget data 时静默合并
-            try {
-              const rd = await (await fetch("/api/data", { headers: cacheStore.getHeaders() })).json();
-              const serverWidgets = (rd.widgets || []) as any[];
-              const localWidgets = widgetsStore.widgets as any[];
-              const serverMap = new Map(serverWidgets.map((w: any) => [w.id, w]));
-              const localMap = new Map(localWidgets.map((w: any) => [w.id, w]));
-
-              let canAutoMerge = true;
-              const mergedWidgets = [...localWidgets];
-
-              for (const [id, sw] of serverMap) {
-                const lw = localMap.get(id);
-                if (!lw) {
-                  // 服务端新增的 widget，直接采用
-                  mergedWidgets.push(sw);
-                } else if (stableStringify(sw.data) !== stableStringify(lw.data)) {
-                  // data 不同 → 检查本端是否修改过
-                  let localModified = false;
-                  try {
-                    const lastSaved = JSON.parse(lastSavedJson || "{}") as { widgets?: any[] };
-                    const lastSavedW = (lastSaved.widgets || []).find((w: any) => w.id === id);
-                    if (lastSavedW && stableStringify(lastSavedW.data) !== stableStringify(lw.data)) {
-                      localModified = true;
-                    }
-                  } catch { /* lastSavedJson 解析失败视为本端未修改 */ }
-                  if (localModified) {
-                    canAutoMerge = false;
-                    break;
-                  }
-                  // 本端未修改，采用服务端
-                  const idx = mergedWidgets.findIndex((w: any) => w.id === id);
-                  if (idx >= 0) mergedWidgets[idx] = sw;
-                }
-              }
-
-              // 检查服务端删除的 widget（本地有但服务端没有）
-              if (canAutoMerge) {
-                for (const [id, lw] of localMap) {
-                  if (!serverMap.has(id)) {
-                    // 检查本端是否修改过该 widget
-                    let localModified = false;
-                    try {
-                      const lastSaved = JSON.parse(lastSavedJson || "{}") as { widgets?: any[] };
-                      const lastSavedW = (lastSaved.widgets || []).find((w: any) => w.id === id);
-                      if (!lastSavedW || stableStringify(lastSavedW.data) !== stableStringify(lw.data)) {
-                        localModified = true;
-                      }
-                    } catch { localModified = true; }
-                    if (localModified) {
-                      canAutoMerge = false;
-                      break;
-                    }
-                    // 本端未修改，服务端已删除 → 从合并结果中移除
-                    const idx = mergedWidgets.findIndex((w: any) => w.id === id);
-                    if (idx >= 0) mergedWidgets.splice(idx, 1);
-                  }
-                }
-              }
-
-              if (canAutoMerge) {
-                // 自动合并成功，用合并后的数据重新保存
-                const mergedBody = {
-                  ...body,
-                  widgets: mergedWidgets.map((w: any) => stripWidgetUiState(w)),
-                  groups: rd.groups || body.groups,
-                  version: v,
-                };
-                if (rd.appConfig) mergedBody.appConfig = { ...body.appConfig, ...rd.appConfig };
-                const mr = await fetch("/api/save", { method: "POST", headers: cacheStore.getHeaders(), body: JSON.stringify(mergedBody) });
-                if (mr.ok) {
-                  conflictState.value.show = false; hasUnsavedChanges.value = false;
-                  const mrd = await mr.json().catch(() => null);
-                  dataVersion.value = mrd && typeof (mrd as { version?: number }).version !== "undefined" ? normalizeVersion((mrd as { version?: number }).version) : v + 1;
-                  lastSavedJson = JSON.stringify({ ...mergedBody, version: dataVersion.value });
-                  widgetsStore.updateLastSavedLayout();
-                  if (body.password) auth.password = "";
-                  return "saved";
-                }
-              }
-            } catch (e) { console.warn("LWW merge failed", e); }
             // Retry with adopted version
             const rb = { ...body, version: v };
             const retryController = new AbortController();
@@ -295,7 +205,7 @@ export const useSaveStore = defineStore("save", () => {
                 rssFeedsUnch = jsonEqual(rssFeeds.value, lb.rssFeeds || []);
                 rssCategoriesUnch = jsonEqual(rssCategories.value, lb.rssCategories || []);
               }
-            } catch { }
+            } catch {}
             if (!lChg && gUnch && rssFeedsUnch && rssCategoriesUnch) {
               dataVersion.value = v; await fetchData(); hasPendingSave.value = false; return "saved";
             }
@@ -367,11 +277,14 @@ export const useSaveStore = defineStore("save", () => {
     dataVersion: number,
     fetchVersionOnly: () => Promise<number>,
   ) => {
-    if (!isLogged) return;
+    if (!isLogged || !heartbeatLostSinceLastVisible) return;
     heartbeatLostSinceLastVisible = false;
     try {
-      const serverVer = await fetchVersionOnly();
-      if (serverVer > dataVersion) {
+      const res = await fetch("/api/version", { headers: cacheStore.getHeaders() });
+      if (!res.ok) return;
+      const data = (await res.json()) as { version?: number };
+      const serverVer = normalizeVersion(data?.version);
+      if (serverVer !== dataVersion) {
         syncConfirmModal.value = { show: true, serverVersion: serverVer };
       }
     } catch { /* ignore */ }

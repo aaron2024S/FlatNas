@@ -1,5 +1,22 @@
 # FlatNas
 
+> ## ⚠️ 关于本仓库（GitHub 上的修改版 / fork）
+>
+> 本仓库是 **[Garry-QD/FlatNas](https://github.com/Garry-QD/FlatNas)** 的**修改版**，
+> 由 **[@aaron2024S](https://github.com/aaron2024S)** 自 **2026-09-25** 起在其基础上改动，
+> 主要用于个人自托管（NAS）部署，不是原作者的官方版本。
+>
+> - **原始作品版权归原作者所有**，本仓库保留上游的 `LICENSE`（**AGPL-3.0**）不动，
+>   并同样以 AGPL-3.0 协议发布本修改版。
+> - 本修改版相对上游的差异（含删除上游提交过的构建产物/运行数据，以及
+>   静态素材目录整理、Docker 构建细节调整等）可以直接用
+>   `git log --oneline` / `git diff <上游提交>` 查看，本仓库的改动集中在该 fork 的提交历史里。
+> - **问题反馈请优先找本仓库作者（@aaron2024S）**，不要拿本修改版去打扰原作者。
+> - 想用原始版本 / 官方镜像：<https://github.com/Garry-QD/FlatNas> ·
+>   <https://hub.docker.com/r/qdnas/flatnas>
+>
+> 本声明依据 AGPL-3.0 第 5(a) 条（修改版须带醒目声明与日期）做出。
+
 [![GitHub](https://img.shields.io/badge/GitHub-FlatNas-181717?style=flat&logo=github&logoColor=white)](https://github.com/Garry-QD/FlatNas)
 [![Gitee](https://img.shields.io/badge/Gitee-FlatNas-C71D23?style=flat&logo=gitee&logoColor=white)](https://gitee.com/gjx0808/FlatNas)
 [![Docker Image](https://img.shields.io/badge/Docker-qdnas%2Fflatnas-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/qdnas/flatnas)
@@ -149,19 +166,17 @@ sudo ./manage.sh
 
 #### Debian/Ubuntu 卸载（命令行）
 
-如果需要卸载，也可以直接运行部署脚本并选择卸载模式，或运行管理脚本并选择"卸载服务"。
+如果需要卸载，也可以直接运行管理脚本并选择“卸载服务”。
 
 ```bash
-sudo ./deploy_debian.sh uninstall
-# 或
-sudo ./manage.sh
+sudo ./debian/manage.sh
 ```
 
 ### 2. 本地安装（Release 包）
 
 适用于已能访问服务器的场景，上传 Release 包内容后直接运行。
 
-1. 从 GitHub Releases 下载对应架构的 `flatnas-amd64.zip` 或 `flatnas-arm64.zip`
+1. 从 GitHub Releases 下载 `release.zip`
 2. 上传到服务器并解压到任意目录（例如 `/opt/flatnas`）
 3. 进入解压目录并启动服务
 

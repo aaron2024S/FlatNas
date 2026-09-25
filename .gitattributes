@@ -1,0 +1,56 @@
+# 统一让仓库里存的行尾是 LF。
+#
+# 为什么必须加这一条：Windows 上 git 默认 core.autocrlf=true，会把 .sh 检出成 CRLF，
+# 而 deploy_debian.sh / manage.sh 是要拷到 Debian/NAS 上直接执行的脚本 ——
+# CRLF 会让 shell 报 `bad interpreter: /bin/sh^M`，脚本根本跑不起来。
+# 声明 eol=lf 后，仓库里和检出的都固定是 LF。
+* text=auto eol=lf
+
+# 明确的文本类型
+*.go    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.vue   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
+*.sh    text eol=lf
+
+# Windows / PowerShell 脚本保持 CRLF（PowerShell 对 LF 的兼容性不如 bat）
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制：明确声明，避免 git 做行尾转换时损坏文件
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.bmp   binary
+*.svg   text eol=lf
+*.mp3   binary
+*.wav   binary
+*.ogg   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.so    binary
+
+# 让 GitHub 的语言统计和 diff 更干净
+frontend/package-lock.json linguist-generated=true
+backend/go.sum linguist-generated=true

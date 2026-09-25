@@ -1,50 +1,27 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from "vue";
 import { useStorage } from "@vueuse/core";
-import { useI18n } from "vue-i18n";
 import { useMainStore } from "../stores/main";
-import { useI18nStore, type SupportedLocale } from "@/stores/i18n";
 import type { WidgetConfig, NavGroup, NavItem } from "@/types";
 import IconUploader from "./IconUploader.vue";
 import WallpaperLibrary from "./WallpaperLibrary.vue";
 import PasswordConfirmModal from "./PasswordConfirmModal.vue";
 import DockerWidget from "./DockerWidget.vue";
 import ProxyToggle from "./ProxyToggle.vue";
-import SystemStatusWidget from "./SystemStatusWidget.vue";
+
 import RssSettings from "./RssSettings.vue";
 import SearchSettings from "./SearchSettings.vue";
 import ScriptManager from "./ScriptManager.vue";
+import MarketplaceModal from "./MarketplaceModal.vue";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
 import { DEFAULT_NETWORK_RULES, NETWORK_PRESET_RULES } from "@/utils/network";
 import { createDefaultWidgetList } from "@/utils/widgetUtils";
 import { toApiUrl } from "@/utils/runtimeUrls";
 import daoliyuLogo from "@/assets/daoliyu.svg";
 
-const { t } = useI18n();
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits(["update:show"]);
 const store = useMainStore();
-const i18nStore = useI18nStore();
-
-const LOCALE_LABELS: Record<SupportedLocale, string> = {
-  "zh-CN": "简体中文",
-  "en-US": "English",
-  "ja-JP": "日本語",
-  "de-DE": "Deutsch",
-  "zh-TW": "繁體中文",
-  "fr-FR": "Français",
-  "es-ES": "Español",
-};
-
-const LOCALE_FLAGS: Record<SupportedLocale, string> = {
-  "zh-CN": "🇨🇳",
-  "en-US": "🇺🇸",
-  "ja-JP": "🇯🇵",
-  "de-DE": "🇩🇪",
-  "zh-TW": "🇹🇼",
-  "fr-FR": "🇫🇷",
-  "es-ES": "🇪🇸",
-};
 
 // 自动保存所有设置修改
 watch(
@@ -57,20 +34,11 @@ watch(
   { deep: true }
 );
 
-const handleEscapeKey = (e: KeyboardEvent) => {
-  if (e.key === "Escape" && props.show) {
-    e.stopPropagation();
-    emit("update:show", false);
-  }
-};
-
 onMounted(() => {
   store.lockServerSync();
-  document.addEventListener("keydown", handleEscapeKey);
 });
 onUnmounted(() => {
   store.unlockServerSync();
-  document.removeEventListener("keydown", handleEscapeKey);
 });
 
 const DEFAULT_LATENCY_THRESHOLD_MS = 200;
@@ -80,11 +48,11 @@ const latencyThresholdAppliedToast = ref("");
 let latencyThresholdToastTimer: number | null = null;
 const latencyThresholdValidation = computed(() => {
   const raw = latencyThresholdDraft.value.trim();
-  if (!raw) return { ok: false, value: null as number | null, error: t('settings.validation.latencyInput') };
-  if (!/^\d+$/.test(raw)) return { ok: false, value: null as number | null, error: t('settings.validation.positiveInteger') };
+  if (!raw) return { ok: false, value: null as number | null, error: "请输入阈值（20–30000）" };
+  if (!/^\d+$/.test(raw)) return { ok: false, value: null as number | null, error: "仅支持正整数" };
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n)) return { ok: false, value: null as number | null, error: t('settings.validation.invalidValue') };
-  if (n < 20 || n > 30000) return { ok: false, value: n, error: t('settings.validation.latencyRange') };
+  if (!Number.isFinite(n)) return { ok: false, value: null as number | null, error: "数值无效" };
+  if (n < 20 || n > 30000) return { ok: false, value: n, error: "范围需在 20–30000 ms" };
   return { ok: true, value: n, error: "" };
 });
 const whitelistLatencyEnabled = computed(() => {
@@ -124,7 +92,7 @@ const applyLatencyThreshold = async () => {
   store.appConfig.latencyThresholdMs = v.value;
   latencyThresholdTouched.value = false;
   store.markDirty();
-  latencyThresholdAppliedToast.value = `${t('settings.messages.saved')}：${v.value} ms`;
+  latencyThresholdAppliedToast.value = `已生效：${v.value} ms`;
   if (latencyThresholdToastTimer) window.clearTimeout(latencyThresholdToastTimer);
   latencyThresholdToastTimer = window.setTimeout(() => {
     latencyThresholdAppliedToast.value = "";
@@ -144,7 +112,7 @@ const resetLatencyThreshold = async () => {
   store.appConfig.latencyThresholdMs = DEFAULT_LATENCY_THRESHOLD_MS;
   syncLatencyThresholdDraft();
   store.markDirty();
-  latencyThresholdAppliedToast.value = `${t('settings.messages.reset')}：${DEFAULT_LATENCY_THRESHOLD_MS} ms`;
+  latencyThresholdAppliedToast.value = `已重置：${DEFAULT_LATENCY_THRESHOLD_MS} ms`;
   if (latencyThresholdToastTimer) window.clearTimeout(latencyThresholdToastTimer);
   latencyThresholdToastTimer = window.setTimeout(() => {
     latencyThresholdAppliedToast.value = "";
@@ -324,7 +292,21 @@ const handleWallpaperSelect = (payload: { url: string; type: string } | string) 
   store.markDirty();
 };
 
-const activeTab = ref("style");
+// 显式联合类型：模板里的 tab 比较需要完整成员集合，
+// 否则 vue-tsc 控制流收窄后会把兄弟 v-if 的比较报成 TS2367
+type SettingsTab =
+  | "style"
+  | "widgets"
+  | "universal-window"
+  | "docker"
+  | "account"
+  | "network"
+  | "lucky-stun"
+  | "about";
+const activeTab = ref<SettingsTab>("style");
+// 模板里用函数比较而不是 `activeTab === 'x'`：
+// vue-tsc 会把同级 v-if 的字面量比较做控制流收窄，docker 之后的 tab 会被误报 TS2367
+const isTab = (t: SettingsTab) => activeTab.value === t;
 const handleNavWheel = (e: WheelEvent) => {
   if (window.innerWidth < 768) {
     const container = e.currentTarget as HTMLElement;
@@ -333,7 +315,6 @@ const handleNavWheel = (e: WheelEvent) => {
 };
 
 const dockerWidget = computed(() => store.widgets.find((w) => w.type === "docker"));
-const systemStatusWidget = computed(() => store.widgets.find((w) => w.type === "system-status"));
 const musicWidget = computed(() => store.widgets.find((w) => w.type === "music"));
 const multiOpenWidgetTypes = ["iframe", "countdown", "countup", "amap-weather"];
 const dedicatedWidgetTypes = ["docker"];
@@ -472,7 +453,7 @@ const testMusicAuth = async () => {
   const password = musicWidget.value.data.password;
 
   if (!username || !password) {
-    testMusicAuthResult.value = { success: false, message: t('settings.validation.enterUsernamePassword') };
+    testMusicAuthResult.value = { success: false, message: "请输入用户名和密码" };
     return;
   }
 
@@ -506,20 +487,20 @@ const testMusicAuth = async () => {
         }
 
         store.markDirty();
-        testMusicAuthResult.value = { success: true, message: t('settings.messages.musicAuth.success') };
+        testMusicAuthResult.value = { success: true, message: "登录成功" };
       } else {
-        testMusicAuthResult.value = { success: false, message: t('settings.messages.musicAuth.noToken') };
+        testMusicAuthResult.value = { success: false, message: "登录失败：未获取到 Token" };
       }
     } else {
       const errText = await res.text();
       testMusicAuthResult.value = {
         success: false,
-        message: `${t('settings.messages.loginFailed')} (${res.status}): ${errText}`,
+        message: `登录失败 (${res.status}): ${errText}`,
       };
     }
   } catch (e: unknown) {
     console.error("Auth test error:", e);
-    testMusicAuthResult.value = { success: false, message: `${t('settings.messages.requestError')}: ${(e as Error).message}` };
+    testMusicAuthResult.value = { success: false, message: `请求错误: ${(e as Error).message}` };
   } finally {
     isTestingMusicAuth.value = false;
   }
@@ -562,10 +543,10 @@ const updateDisplayName = async () => {
       // alert("昵称修改成功");
       showRenameModal.value = false;
     } else {
-      alert(`${t('settings.messages.nicknameFailed')}: ` + (await res.text()));
+      alert("修改失败: " + (await res.text()));
     }
   } catch (e: unknown) {
-    alert(`${t('settings.messages.requestError')}: ` + (e as Error).message);
+    alert("请求错误: " + (e as Error).message);
   } finally {
     isUpdatingProfile.value = false;
   }
@@ -608,22 +589,37 @@ const testWeatherConnection = async (sourceOverride?: string) => {
     if (res.ok && j.success && j.data) {
       testWeatherResult.value = {
         success: true,
-        message: `${t('settings.messages.weatherSuccess')} ${j.data.city} ${t('settings.messages.weather')}: ${j.data.text} ${j.data.temp}°C`,
+        message: `连接成功！已获取 ${j.data.city} 天气：${j.data.text} ${j.data.temp}°C`,
       };
     } else {
       testWeatherResult.value = {
         success: false,
-        message: `${t('settings.messages.weatherFailed')}: ${j.error || t('settings.messages.weatherUnknown')}`,
+        message: `连接失败: ${j.error || "未知错误"}`,
       };
     }
   } catch (e) {
     testWeatherResult.value = {
       success: false,
-      message: `${t('settings.messages.weatherError')}: ${(e as Error).message || String(e)}`,
+      message: `请求异常: ${(e as Error).message || String(e)}`,
     };
   } finally {
     isTestingWeather.value = false;
   }
+};
+
+const showMarketplace = ref(false);
+const openMarketplace = () => {
+  showMarketplace.value = true;
+};
+
+const setDevMarketplaceUrl = () => {
+  store.appConfig.marketplaceListUrl = "http://localhost:5174/";
+  store.markDirty();
+};
+
+const openMarketplaceInNewWindow = () => {
+  const url = (store.appConfig.marketplaceListUrl || "http://qdnas.icu:23111/").trim();
+  window.open(url, "_blank", "noopener,noreferrer");
 };
 
 const passwordInput = ref("");
@@ -644,7 +640,7 @@ const toggleDockerSystemEnabled = async (checked: boolean) => {
   try {
     const success = await store.updateSystemConfig({ enableDocker: checked });
     if (!success) {
-      alert(t('settings.messages.dockerSwitchFailed'));
+      alert("Docker 服务切换失败，请确认当前账号具有管理员权限。");
     }
   } finally {
     isUpdatingDockerSystem.value = false;
@@ -691,7 +687,7 @@ const fetchMusicFiles = async () => {
     musicFiles.value = Array.isArray(list) ? list.map((x) => String(x)) : [];
   } catch {
     musicFiles.value = [];
-    musicManagerStatus.value = t('settings.messages.fetchFailed');
+    musicManagerStatus.value = "获取失败";
   } finally {
     isMusicListLoading.value = false;
   }
@@ -725,7 +721,7 @@ const deleteMusicFile = async (filePath: string) => {
   } catch (e: unknown) {
     console.error(e);
     const msg = e instanceof Error ? e.message : String(e);
-    alert(`${t('settings.messages.deleteFailed')}: ${msg}`);
+    alert("删除失败: " + msg);
   }
 };
 
@@ -741,7 +737,7 @@ const uploadMusic = async (event: Event) => {
     }
   }
 
-  uploadStatus.value = `${t('settings.messages.uploading')} ${files.length} ${t('settings.messages.files')}`;
+  uploadStatus.value = `正在上传 ${files.length} 个文件...`;
   try {
     const token = localStorage.getItem("flat-nas-token");
     const headers: Record<string, string> = {};
@@ -754,7 +750,7 @@ const uploadMusic = async (event: Event) => {
     });
     const data = await res.json();
     if (data.success) {
-      uploadStatus.value = `${t('settings.messages.uploadSuccess')} ${data.count} ${t('settings.messages.files')}`;
+      uploadStatus.value = `成功上传 ${data.count} 个文件！`;
       if (musicManagerOpen.value) {
         await fetchMusicFiles();
       }
@@ -762,11 +758,11 @@ const uploadMusic = async (event: Event) => {
         uploadStatus.value = "";
       }, 3000);
     } else {
-      uploadStatus.value = `${t('settings.messages.uploadFailed')}: ${data.error || t('settings.messages.weatherUnknown')}`;
+      uploadStatus.value = "上传失败: " + (data.error || "未知错误");
     }
   } catch (e) {
     console.error(e);
-    uploadStatus.value = t('settings.messages.uploadError');
+    uploadStatus.value = "上传出错";
   }
 };
 
@@ -835,7 +831,7 @@ const exportDockerLogs = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    alert(`${t('settings.messages.exportFailed')}: ${msg}`);
+    alert("导出失败: " + msg);
   } finally {
     isExportingDockerLogs.value = false;
   }
@@ -868,23 +864,23 @@ const handleLogin = async () => {
   try {
     const success = await store.login("admin", passwordInput.value);
     if (success) {
-      alert(t('settings.messages.loginSuccess'));
+      alert("登录成功！");
       passwordInput.value = "";
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : t('settings.validation.enterPassword');
+    const msg = e instanceof Error ? e.message : "密码错误！";
     alert(msg);
   }
 };
 const handleChangePassword = () => {
-  if (!newPasswordInput.value || newPasswordInput.value.length < 4) return alert(t('settings.validation.passwordMin'));
+  if (!newPasswordInput.value || newPasswordInput.value.length < 4) return alert("密码至少4位");
   requestAuth(async () => {
     store.changePassword(newPasswordInput.value);
     store.markDirty();
     await store.saveData(true);
-    alert(t('settings.messages.passwordChanged'));
+    alert("密码修改成功，请使用新密码重新登录验证");
     newPasswordInput.value = "";
-  }, t('settings.messages.confirmPassword'));
+  }, "请输入当前密码以确认修改");
 };
 
 const onMobileDockerDisplayChange = (e: Event) => {
@@ -892,14 +888,17 @@ const onMobileDockerDisplayChange = (e: Event) => {
   const w = dockerWidget.value;
   if (w) {
     w.hideOnMobile = !checked;
-    store.markDirty();
+    // 同上：显式落盘，避免只改内存
+    void store.saveData(true);
   }
 };
 
 const handleUltrawideChange = (e: Event) => {
   const checked = (e.target as HTMLInputElement).checked;
   if (checked) {
-    alert(t('settings.messages.ultrawideTip'));
+    alert(
+      "温馨提示：\n1. 分辨率比例判定依据是显示器的物理分辨率或浏览器窗口大小。\n2. 开启此功能后，在分屏显示（如左右并排）时，布局效果可能会变差。\n3. 此模式最适合多屏用户，或将 FlatNas 作为主力办公面板使用的用户。",
+    );
   }
 };
 
@@ -921,37 +920,37 @@ const loadUsers = async () => {
 };
 
 const handleAddUser = async () => {
-  if (!newUser.value || !newPwd.value) return alert(t('settings.validation.enterUsernamePassword'));
+  if (!newUser.value || !newPwd.value) return alert("请输入用户名和密码");
   try {
     await store.addUser(newUser.value, newPwd.value);
-    alert(t('settings.messages.addSuccess'));
+    alert("添加成功");
     newUser.value = "";
     newPwd.value = "";
     loadUsers();
   } catch (e: unknown) {
-    alert((e as Error).message || t('settings.messages.addSuccess'));
+    alert((e as Error).message || "添加失败");
   }
 };
 
 const handleDeleteUser = async (u: string) => {
-  if (!confirm(`${t('settings.messages.confirmDeleteUser')} ${u}？`)) return;
+  if (!confirm(`确定删除用户 ${u} 吗？`)) return;
   try {
     await store.deleteUser(u);
-    alert(t('settings.messages.deleteSuccess'));
+    alert("删除成功");
     loadUsers();
   } catch {
-    alert(t('settings.messages.deleteFailed'));
+    alert("删除失败");
   }
 };
 
 const handleUploadLicense = async () => {
-  if (!licenseKey.value) return alert(t('settings.validation.enterKey'));
+  if (!licenseKey.value) return alert("请输入密钥");
   try {
     await store.uploadLicense(licenseKey.value);
-    alert(t('settings.messages.licenseSuccess'));
+    alert("密钥导入成功，限制已解除");
     licenseKey.value = "";
   } catch (e: unknown) {
-    alert((e as Error).message || t('settings.messages.licenseFailed'));
+    alert((e as Error).message || "导入失败");
   }
 };
 
@@ -971,8 +970,8 @@ const toggleAuthMode = async () => {
   const newMode = currentMode === "single" ? "multi" : "single";
 
   if (newMode === "single") {
-    if (!confirm(t('settings.messages.confirmSwitchSingle'))) return;
-    requestAuth(() => performAuthModeSwitch(newMode), t('settings.messages.confirmSwitchAuth'));
+    if (!confirm("确定要切换到单用户模式吗？\n切换后将隐藏注册入口，默认登录 Admin 账户。")) return;
+    requestAuth(() => performAuthModeSwitch(newMode), "请输入管理员密码以确认切换");
   } else {
     // Show custom warning for multi-user mode switch
     showMultiUserWarning.value = true;
@@ -985,7 +984,7 @@ const performAuthModeSwitch = async (newMode: string) => {
     close();
     store.logout();
   } else {
-    alert(t('settings.messages.switchFailed'));
+    alert("切换失败，请检查权限");
   }
 };
 
@@ -1016,7 +1015,7 @@ const isRegeneratingThumbs = ref(false);
 const thumbRegenerationStats = ref<{ processed: number; generated: number; errors: string[] } | null>(null);
 
 const regenerateAllThumbs = async () => {
-  if (!confirm(t('settings.messages.confirmRegenerateThumbs'))) return;
+  if (!confirm("确定要重新生成所有缺失的缩略图吗？\n这可能需要一些时间。")) return;
   
   isRegeneratingThumbs.value = true;
   thumbRegenerationStats.value = null;
@@ -1039,11 +1038,11 @@ const regenerateAllThumbs = async () => {
         errors: stats.errors || [],
       };
     } else {
-      alert(t('settings.messages.thumbRegenFailed'));
+      alert("缩略图重新生成失败");
     }
   } catch (err) {
     console.error("Failed to regenerate thumbnails:", err);
-    alert(t('settings.messages.thumbRegenFailed'));
+    alert("缩略图重新生成失败");
   } finally {
     isRegeneratingThumbs.value = false;
   }
@@ -1076,7 +1075,7 @@ const saveVersion = async () => {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      alert(`${t('settings.messages.saveFailed')}: ${d.error || r.status}`);
+      alert("保存版本失败: " + (d.error || r.status));
       return;
     }
     versionLabel.value = "";
@@ -1088,7 +1087,7 @@ const saveVersion = async () => {
 
 const restoreVersion = async (id: string) => {
   try {
-    if (!confirm(t('settings.messages.confirmRestoreVersion'))) return;
+    if (!confirm("确认恢复该版本？当前配置将被覆盖（密码不变）")) return;
     const token = localStorage.getItem("flat-nas-token");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -1099,7 +1098,7 @@ const restoreVersion = async (id: string) => {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      alert(`${t('settings.messages.restoreFailed')}: ${d.error || r.status}`);
+      alert("恢复失败: " + (d.error || r.status));
       return;
     }
     window.location.reload();
@@ -1119,7 +1118,7 @@ const deleteVersion = async (id: string) => {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      alert(`${t('settings.messages.deleteFailed')}: ${d.error || r.status}`);
+      alert("删除失败: " + (d.error || r.status));
       return;
     }
     await fetchVersions();
@@ -1160,17 +1159,17 @@ const browserHelperHandshakeLink = computed(() => {
 const copyBrowserHelperHandshakeLink = async () => {
   const link = browserHelperHandshakeLink.value;
   if (!link) {
-    alert(t('settings.messages.loginFirst'));
+    alert("请先登录 FlatNas，再生成浏览器助手握手链接。");
     return;
   }
   await navigator.clipboard.writeText(link);
-  alert(t('settings.messages.copiedHandshake'));
+  alert("已复制浏览器助手握手链接");
 };
 
 const openBrowserHelperHandshakeLink = () => {
   const link = browserHelperHandshakeLink.value;
   if (!link) {
-    alert(t('settings.messages.loginFirst'));
+    alert("请先登录 FlatNas，再生成浏览器助手握手链接。");
     return;
   }
   window.open(link, "_blank", "noopener,noreferrer");
@@ -1178,7 +1177,7 @@ const openBrowserHelperHandshakeLink = () => {
 
 const copyWebhookUrl = () => {
   navigator.clipboard.writeText(getWebhookUrl()).then(() => {
-    alert(t('settings.messages.copiedWebhook'));
+    alert("已复制 Webhook 地址");
   });
 };
 
@@ -1213,7 +1212,6 @@ const isUnknownWidget = (type: string) => {
     "countup",
     "amap-weather",
     "docker",
-    "system-status",
     "status-monitor",
     "file-transfer",
     "music",
@@ -1236,9 +1234,9 @@ const restoreMissingWidgets = () => {
 
   if (addedCount > 0) {
     store.markDirty();
-    alert(`${t('settings.messages.componentsRestored')} ${addedCount} ${t('settings.messages.missingComponents')}`);
-} else {
-  alert(t('settings.messages.noMissingComponents'));
+    alert(`已恢复 ${addedCount} 个缺失的组件`);
+  } else {
+    alert("未发现缺失的核心组件");
   }
 };
 
@@ -1249,8 +1247,8 @@ const addCustomCssWidget = () => {
     type: "custom-css",
     enable: true,
     data: {
-      title: t('settings.messages.customComponentTitle'),
-      html: t('settings.messages.customComponentHtml'),
+      title: "自定义组件",
+      html: '<div class="my-custom-component">\n  <h3>自定义组件</h3>\n  <p>点击右上角编辑按钮修改内容</p>\n</div>',
       css: ".my-custom-component {\n  padding: 10px;\n  background: linear-gradient(to right, #e0eafc, #cfdef3);\n  border-radius: 8px;\n  text-align: center;\n  height: 100%;\n  display: flex;\n  flex-direction: column;\n  justify-content: center;\n}\n.my-custom-component h3 {\n  margin: 0 0 5px 0;\n  color: #333;\n}",
     },
     colSpan: 1,
@@ -1272,7 +1270,7 @@ const addAmapWeatherWidget = () => {
     isPublic: true,
   });
   store.markDirty();
-  alert(t('settings.messages.weatherAdded'));
+  alert("已添加高德天气组件，请在组件上配置 API Key");
 };
 
 const addMusicWidget = () => {
@@ -1281,7 +1279,7 @@ const addMusicWidget = () => {
     id: newId,
     type: "music",
     enable: true,
-    data: { title: t('settings.messages.musicTitle'), apiUrl: "", username: "", password: "" },
+    data: { title: "道理鱼音乐", apiUrl: "", username: "", password: "" },
     colSpan: 1,
     rowSpan: 1,
     isPublic: true,
@@ -1309,41 +1307,86 @@ const enableDockerWidget = () => {
   }
 };
 
-const toggleSystemStatusMock = (checked: boolean) => {
-  const w = systemStatusWidget.value;
-  if (w) {
-    if (!w.data) w.data = {};
-    w.data.useMock = checked;
+const SYS_STATUS_GROUP_TITLE = "系统状态";
+
+const sysStatusGroup = computed(() =>
+  store.groups.find((g) => g.title.trim() === SYS_STATUS_GROUP_TITLE),
+);
+
+const buildSysStatusItem = (
+  kind: "cpu" | "mem" | "disk",
+  idx: number,
+  mount?: string,
+): NavItem => ({
+  id: `sys-status-${kind}-${mount || idx}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  title: kind === "cpu" ? "CPU" : kind === "mem" ? "RAM" : `磁盘${idx}`,
+  url: "",
+  icon: "",
+  isPublic: true,
+  sysStat: {
+    kind,
+    ...(kind === "disk" && mount ? { mount } : {}),
+    ...(kind === "disk" ? { title: `磁盘${idx}` } : {}),
+  },
+});
+
+// 系统状态分组：布局参数复制自"参考分组"（第一个含普通卡片的分组），
+// 保证系统状态卡片和普通卡片同大小同间距；没有普通分组时用全局值。
+const sysStatusLayoutRef = () => {
+  const refGroup = store.groups.find((g) => g.items.some((it) => !it.sysStat));
+  return {
+    cardLayout: "horizontal" as const,
+    cardSize: refGroup?.cardSize ?? store.appConfig.cardSize,
+    gridGap: refGroup?.gridGap ?? store.appConfig.gridGap,
+    iconSize: refGroup?.iconSize ?? store.appConfig.iconSize,
+    showCardBackground: refGroup?.showCardBackground ?? store.appConfig.showCardBackground,
+  };
+};
+
+const applySysStatusLayout = (g: (typeof store.groups)[number]) => {
+  const layout = sysStatusLayoutRef();
+  g.cardLayout = layout.cardLayout;
+  g.cardSize = layout.cardSize;
+  g.gridGap = layout.gridGap;
+  g.iconSize = layout.iconSize;
+  g.showCardBackground = layout.showCardBackground;
+};
+
+const enableSystemStatusWidget = () => {
+  // 新行为：启用 = 创建"系统状态"分组（默认只放 CPU/内存两张卡，
+  // 磁盘卡由用户在该分组点"+"自行添加）。
+  // 旧 system-status 大卡片 widget 已整体删除（widgetUtils 会从存量配置中剥离）。
+  if (!sysStatusGroup.value) {
+    const g = {
+      id: `sys-status-group-${Date.now()}`,
+      title: SYS_STATUS_GROUP_TITLE,
+      ...sysStatusLayoutRef(),
+      items: [buildSysStatusItem("cpu", 0), buildSysStatusItem("mem", 0)],
+    };
+    store.groups.push(g);
+    store.markDirty();
+  } else {
+    // 已存在的分组：布局参数同步为参考值（旧版本创建的分组可能带错误布局）
+    applySysStatusLayout(sysStatusGroup.value);
     store.markDirty();
   }
 };
 
-const enableSystemStatusWidget = () => {
-  const def: WidgetConfig = {
-    id: "system-status",
-    type: "system-status",
-    enable: true,
-    isPublic: true,
-    colSpan: 1,
-    rowSpan: 1,
-    data: { useMock: false },
-  };
-  const exists = store.widgets.find((w) => w.type === "system-status");
-  if (!exists) {
-    store.widgets.push(def);
-    store.markDirty();
-  } else {
-    exists.enable = true;
+const disableSystemStatusGroup = () => {
+  if (sysStatusGroup.value) {
+    store.deleteGroup(sysStatusGroup.value.id, true);
     store.markDirty();
   }
 };
 
 const onMobileSystemStatusDisplayChange = (e: Event) => {
   const checked = (e.target as HTMLInputElement | null)?.checked ?? false;
-  const w = systemStatusWidget.value;
-  if (w) {
-    w.hideOnMobile = !checked;
-    store.markDirty();
+  // 手机端显示改绑"系统状态"分组：hideOnMobile 是分组级字段，GridPanel 渲染时手机端整组隐藏
+  const g = sysStatusGroup.value;
+  if (g) {
+    g.hideOnMobile = !checked;
+    // markDirty 只置标志不落盘，必须显式 saveData（与组件列表开关同一模式），否则手机端不生效
+    void store.saveData(true);
   }
 };
 
@@ -1371,7 +1414,7 @@ const handleExport = async () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch (e) {
-    alert(t('settings.messages.exportFailed'));
+    alert("导出失败");
     console.error("[SettingsModal][Export] failed", e);
   }
 };
@@ -1570,15 +1613,15 @@ const handleFileChange = (event: Event) => {
         if (saveResult !== "saved" && saveResult !== "no_change") {
           console.warn("[SettingsModal][Import] post-icon saveData:", saveResult);
           if (saveResult === "conflict") {
-            alert(t('settings.messages.configConflict'));
+            alert("配置已导入且图标已尽量抓取，但保存时出现版本冲突，请刷新页面后再试。");
             return;
           }
         }
       }
 
-      alert(t('settings.messages.importSuccess'));
+      alert("导入成功！");
     } catch (err) {
-      alert(t('settings.messages.importFailed'));
+      alert("导入失败，请检查文件格式是否为 JSON。");
       console.error("[SettingsModal][Import] failed", err);
     } finally {
       if (fileInput.value) fileInput.value.value = "";
@@ -1846,7 +1889,7 @@ watch(activeTab, (val) => {
     :show="show"
     :z-index="50"
     overlay-class="bg-black/30 backdrop-blur-sm p-3"
-    panel-class="w-full max-w-3xl"
+    panel-class="w-full max-w-[57.6rem]"
   >
     <div
       v-if="isImporting"
@@ -1858,14 +1901,14 @@ watch(activeTab, (val) => {
         ></div>
         <div>
           <h3 class="text-lg font-bold text-gray-900">
-            {{ importOverlayMode === "upload" ? $t('settings.messages.importingConfig') : $t('settings.messages.fetchingIcons') }}
+            {{ importOverlayMode === "upload" ? "正在导入配置…" : "正在后台抓取图标…" }}
           </h3>
           <p class="text-sm text-gray-500 mt-1">
             <template v-if="importOverlayMode === 'upload'">
-              {{ $t('settings.messages.savingToServer') }}
+              正在保存到服务器，请稍候（完成后若需补图标会继续显示进度）
             </template>
             <template v-else>
-              {{ $t('settings.messages.configSavedFetchingIcons') }}
+              配置已保存。正在从网络获取网站图标，完成后会自动写入配置。若某个站点较慢会短暂停顿，属于正常现象。
             </template>
           </p>
         </div>
@@ -1876,20 +1919,20 @@ watch(activeTab, (val) => {
               :style="{ width: `${(importProgress / importTotal) * 100}%` }"
             ></div>
           </div>
-          <p class="text-xs text-gray-400">{{ $t('settings.messages.iconProgress') }} {{ importProgress }} / {{ importTotal }}</p>
+          <p class="text-xs text-gray-400">图标进度：{{ importProgress }} / {{ importTotal }}</p>
         </div>
       </div>
     </div>
 
     <div
-      class="backdrop-blur-xl rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col md:flex-row h-[600px] md:h-[480px] relative"
-      :class="isNightDaylightMode ? 'night-settings bg-slate-900/60 text-slate-100 border border-white/10' : 'bg-white/90'"
+      class="backdrop-blur-xl rounded-2xl shadow-2xl w-full max-w-[57.6rem] overflow-hidden flex flex-col md:flex-row h-[min(720px,calc(100dvh_-_1.5rem))] md:h-[min(576px,calc(100dvh_-_1.5rem))] relative"
+      :class="isNightDaylightMode ? 'night-settings bg-slate-900/60 text-slate-100 border border-white/10' : 'bg-gray-100'"
       :style="{ transform: `translate(${modalPosition.x}px, ${modalPosition.y}px)` }"
       @wheel.stop
     >
       <button
         @click="close"
-        class="absolute top-4 right-4 bg-red-100 hover:bg-red-200 text-red-500 hover:text-red-900 z-10 w-7 h-7 rounded-full flex items-center justify-center shadow-sm transition-colors"
+        class="absolute top-4 right-4 bg-transparent hover:bg-gray-200 text-gray-400 hover:text-gray-700 z-10 w-7 h-7 rounded-full flex items-center justify-center transition-colors"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -1904,13 +1947,13 @@ watch(activeTab, (val) => {
       </button>
 
       <div
-        class="w-full md:w-1/4 bg-transparent border-b md:border-b-0 md:border-r border-gray-100 p-3 flex flex-col md:flex-col shrink-0 cursor-move glass-panel"
+        class="w-full md:w-1/4 bg-transparent border-b md:border-b-0 md:border-r border-gray-200 p-3 flex flex-col md:flex-col shrink-0 cursor-move glass-panel"
         @mousedown="onMouseDown"
       >
-        <h3 class="text-xl font-bold text-gray-900 mb-3 md:mb-4 px-2">{{ $t('settings.title') }}</h3>
+        <h3 class="text-xl font-bold text-gray-900 mb-3 md:mb-4 px-2">设置</h3>
         <nav
           ref="navRef"
-          class="flex flex-row md:flex-col gap-1 md:gap-0 md:space-y-0.5 overflow-x-auto md:overflow-visible pb-1 md:pb-0 no-drag cursor-grab active:cursor-grabbing overscroll-contain"
+          class="flex flex-row md:flex-col gap-2 md:gap-0 md:space-y-2 overflow-x-auto md:overflow-visible pb-1 md:pb-0 no-drag cursor-grab active:cursor-grabbing overscroll-contain"
           @mousedown="onNavMouseDown"
           @mousemove="onNavMouseMove"
           @mouseup="onNavMouseUp"
@@ -1921,102 +1964,99 @@ watch(activeTab, (val) => {
             @click="activeTab = 'style'"
             :class="
               activeTab === 'style'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.style') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42" /></svg>
+            外观布局
           </button>
           <button
             @click="activeTab = 'widgets'"
             :class="
               activeTab === 'widgets'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.widgets') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" /></svg>
+            单开组件
           </button>
 
           <button
             @click="activeTab = 'universal-window'"
             :class="
               activeTab === 'universal-window'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.universalWindow') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" /></svg>
+            多开组件
           </button>
           <button
             @click="activeTab = 'docker'"
             :class="
               activeTab === 'docker'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.docker') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 5.625c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
+            Docker 管理
           </button>
           <button
             @click="activeTab = 'account'"
             :class="
               activeTab === 'account'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.account') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" /></svg>
+            账户管理
           </button>
           <button
             @click="activeTab = 'network'"
             :class="[
-              'px-3 py-1.5 text-sm transition-colors text-left flex items-center gap-1.5',
+              'px-3 py-2.5 text-sm transition-colors text-left flex items-center gap-2',
               activeTab === 'network'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50',
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle',
             ]"
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 rounded-lg"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 rounded-xl flex items-center gap-2 px-3 py-2.5 text-sm transition-colors"
           >
-            {{ $t('settings.tabs.network') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 0 1 7.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 0 1 1.06 0Z" /></svg>
+            网络判定
           </button>
           <button
             @click="activeTab = 'lucky-stun'"
             :class="
               activeTab === 'lucky-stun'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.luckyStun') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m-18.432 0A8.959 8.959 0 0 1 3 12c0-.778.099-1.533.284-2.253" /></svg>
+            开放中心
           </button>
           <button
             @click="activeTab = 'about'"
             :class="
               activeTab === 'about'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-red-500 hover:bg-red-50 font-medium'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle settings-nav-idle-danger'
             "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
           >
-            {{ $t('settings.tabs.about') }}
-          </button>
-          <button
-            @click="activeTab = 'language'"
-            :class="
-              activeTab === 'language'
-                ? 'selected-outline text-gray-900'
-                : 'border border-transparent text-gray-600 hover:bg-gray-50'
-            "
-            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
-          >
-            {{ $t('settings.tabs.language') }}
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" /></svg>
+            关于
           </button>
         </nav>
         <div v-if="iconSrc" class="mt-auto px-3 pb-3 hidden md:flex justify-center">
@@ -2028,10 +2068,10 @@ watch(activeTab, (val) => {
         <div class="flex-1 p-3 overflow-y-auto overscroll-contain" @wheel.stop>
           <div v-if="activeTab === 'style'" class="space-y-4">
             <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.sections.basicInfo') }}</h4>
+              <h4 class="text-base font-bold mb-4 text-gray-900">基础信息</h4>
               <div class="space-y-2">
                 <div>
-                  <label class="text-sm font-medium text-gray-700 mb-1 block">{{ $t('settings.sections.siteTitle') }}</label>
+                  <label class="text-sm font-medium text-gray-700 mb-1 block">网站标题</label>
                   <input
                     v-model="store.appConfig.customTitle"
                     type="text"
@@ -2039,7 +2079,7 @@ watch(activeTab, (val) => {
                   />
                 </div>
                 <div>
-                  <label class="text-sm font-medium text-gray-700 mb-1 block">{{ $t('settings.sections.backgroundImage') }}</label>
+                  <label class="text-sm font-medium text-gray-700 mb-1 block">背景图片</label>
                   <div class="border border-gray-200 rounded-xl p-2 bg-white/60">
                     <IconUploader
                       v-model="store.appConfig.background"
@@ -2068,7 +2108,7 @@ watch(activeTab, (val) => {
                         @click="showWallpaperLibrary = true"
                         class="text-xs text-blue-600 hover:text-blue-700 font-bold flex items-center gap-1 ml-auto px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 transition-colors"
                       >
-                        {{ $t('settings.sections.manageWallpaperLibrary') }}
+                        管理壁纸库
                       </button>
                     </div>
                   </div>
@@ -2076,9 +2116,9 @@ watch(activeTab, (val) => {
                 <div class="space-y-2">
                   <div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white/70 px-3 py-2">
                     <div class="flex flex-col">
-                      <span class="text-sm font-medium text-gray-700">{{ $t('settings.sections.dayMode') }}</span>
+                      <span class="text-sm font-medium text-gray-700">白昼模式</span>
                       <span class="text-[11px] text-gray-400"
-                        >{{ $t('settings.sections.dayModeDesc') }}
+                        >白天 6:00-18:00，夜间 18:00-6:00 自动调整遮罩为
                         {{ daylightMaskPercent }}%</span
                       >
                     </div>
@@ -2118,8 +2158,8 @@ watch(activeTab, (val) => {
                   </div>
                   <div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white/70 px-3 py-2">
                     <div class="flex flex-col">
-                      <span class="text-sm font-medium text-gray-700">{{ $t('settings.sections.weatherEffect') }}</span>
-                      <span class="text-[11px] text-gray-400">{{ $t('settings.sections.weatherEffectDesc') }}</span>
+                      <span class="text-sm font-medium text-gray-700">环境天气效果</span>
+                      <span class="text-[11px] text-gray-400">雨天自动开启背景雨效</span>
                     </div>
                     <label class="relative inline-flex items-center cursor-pointer">
                       <input
@@ -2142,7 +2182,7 @@ watch(activeTab, (val) => {
                   </div>
                 </div>
                 <div>
-                  <label class="text-sm font-medium text-gray-700 mb-1 block">{{ $t('settings.sections.solidColor') }}</label>
+                  <label class="text-sm font-medium text-gray-700 mb-1 block">纯色背景</label>
                   <div class="flex items-center gap-2">
                     <input
                       type="color"
@@ -2162,16 +2202,16 @@ watch(activeTab, (val) => {
                         store.markDirty();
                       "
                       class="px-3 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-colors text-xs font-medium"
-                      :title="$t('settings.extraSections.clearSolidBg')"
+                      title="清除纯色背景"
                     >
-                      {{ $t('settings.extraSections.resetBtn') }}
+                      重置
                     </button>
                     <button
                       @click="setSolidColorAsWallpaper"
                       class="px-3 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 flex items-center justify-center text-blue-600 transition-colors text-xs font-medium"
-                      :title="$t('settings.sections.setAsWallpaper')"
+                      title="设为壁纸"
                     >
-                      {{ $t('settings.sections.setAsWallpaper') }}
+                      设为壁纸
                     </button>
                   </div>
                 </div>
@@ -2181,9 +2221,9 @@ watch(activeTab, (val) => {
             <WallpaperLibrary v-model:show="showWallpaperLibrary" @select="handleWallpaperSelect" />
 
             <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.sections.layout') }}</h4>
+              <h4 class="text-base font-bold mb-4 text-gray-900">布局与排版</h4>
               <div class="mb-2">
-                <h5 class="text-sm font-medium text-gray-700 mb-2">{{ $t('settings.sections.topBarLayout') }}</h5>
+                <h5 class="text-sm font-medium text-gray-700 mb-2">顶部栏布局</h5>
                 <div class="flex gap-2">
                   <button
                     @click="store.appConfig.titleAlign = 'left'"
@@ -2194,7 +2234,7 @@ watch(activeTab, (val) => {
                         : 'border-gray-200 text-gray-500 bg-white hover:bg-gray-50'
                     "
                   >
-                    <span class="text-sm">{{ $t('settings.sections.standardLayout') }}</span>
+                    <span class="text-sm">标准布局</span>
                   </button>
                   <button
                     @click="store.appConfig.titleAlign = 'right'"
@@ -2205,7 +2245,7 @@ watch(activeTab, (val) => {
                         : 'border-gray-200 text-gray-500 bg-white hover:bg-gray-50'
                     "
                   >
-                    <span class="text-sm">{{ $t('settings.sections.invertedLayout') }}</span>
+                    <span class="text-sm">反转布局</span>
                   </button>
                   <button
                     @click="
@@ -2218,13 +2258,13 @@ watch(activeTab, (val) => {
                         : 'border-gray-200 text-gray-500 bg-white hover:bg-gray-50'
                     "
                   >
-                    <span class="text-sm">{{ $t('settings.sections.hideHeaderOnMobile') }}</span>
+                    <span class="text-sm">手机隐藏顶部</span>
                   </button>
                 </div>
               </div>
               <div class="grid grid-cols-2 gap-4 mb-2">
                 <div>
-                  <h4 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.sections.titleSizeLabel') }}</h4>
+                  <h4 class="text-sm font-medium text-gray-700 mb-1">标题大小</h4>
                   <input
                     type="range"
                     v-model.number="store.appConfig.titleSize"
@@ -2234,7 +2274,7 @@ watch(activeTab, (val) => {
                   />
                 </div>
                 <div>
-                  <h4 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.sections.titleColorLabel') }}</h4>
+                  <h4 class="text-sm font-medium text-gray-700 mb-1">标题颜色</h4>
                   <div class="flex items-center gap-2">
                     <input
                       type="color"
@@ -2244,19 +2284,19 @@ watch(activeTab, (val) => {
                     <button
                       @click="store.appConfig.titleColor = '#ffffff'"
                       class="px-3 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-colors text-xs font-medium"
-                      :title="$t('settings.extraSections.resetColor')"
+                      title="重置颜色"
                     >
-                      {{ $t('settings.extraSections.resetBtn') }}
+                      重置
                     </button>
                   </div>
                 </div>
               </div>
               <div class="mb-2">
-                <h5 class="text-sm font-medium text-gray-700 mb-2">{{ $t('settings.sections.webLayout') }}</h5>
+                <h5 class="text-sm font-medium text-gray-700 mb-2">WEB端布局</h5>
                 <div
                   class="flex items-center justify-between border border-gray-200 rounded-xl p-3"
                 >
-                  <span class="text-sm font-bold text-gray-900">{{ $t('settings.sections.displayMode') }}</span>
+                  <span class="text-sm font-bold text-gray-900">展现方式</span>
                   <div class="flex items-center gap-2">
                     <div
                       class="relative h-9 w-[180px] rounded-full bg-gray-100/90 p-1 flex items-center select-none shadow-inner focus-within:ring-2 focus-within:ring-green-300/60 focus-within:ring-offset-2 focus-within:ring-offset-white/60"
@@ -2279,7 +2319,7 @@ watch(activeTab, (val) => {
                         "
                         @click="store.appConfig.webGroupPagination = false"
                       >
-                        {{ $t('settings.sections.singleColumn') }}
+                        一栏页
                       </button>
                       <button
                         type="button"
@@ -2291,7 +2331,7 @@ watch(activeTab, (val) => {
                         "
                         @click="store.appConfig.webGroupPagination = true"
                       >
-                        {{ $t('settings.sections.pageByGroup') }}
+                        按组分页
                       </button>
                     </div>
                     <button
@@ -2310,7 +2350,7 @@ watch(activeTab, (val) => {
                           !store.appConfig.webGroupPaginationDisableFlip
                       "
                     >
-                      {{ $t('settings.sections.disablePagination') }}
+                      禁止翻页
                     </button>
                   </div>
                 </div>
@@ -2318,7 +2358,7 @@ watch(activeTab, (val) => {
 
               <div class="grid grid-cols-2 gap-4 mt-4">
                 <div>
-                  <h4 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.sections.widgetAreaSize') }}</h4>
+                  <h4 class="text-sm font-medium text-gray-700 mb-1">组件区整区尺寸</h4>
                   <div class="flex items-center gap-2">
                     <input
                       type="number"
@@ -2345,7 +2385,7 @@ watch(activeTab, (val) => {
                   </div>
                 </div>
                 <div>
-                  <h4 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.sections.groupVerticalGap') }}</h4>
+                  <h4 class="text-sm font-medium text-gray-700 mb-1">分组垂直间距</h4>
                   <div class="flex items-center gap-2">
                     <input
                       type="range"
@@ -2361,25 +2401,25 @@ watch(activeTab, (val) => {
                   </div>
                 </div>
                 <div>
-                  <h4 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.sections.mouseHoverEffect') }}</h4>
+                  <h4 class="text-sm font-medium text-gray-700 mb-1">鼠标悬停效果</h4>
                   <select
                     v-model="store.appConfig.mouseHoverEffect"
                     class="w-full px-3 py-2 border border-gray-200 rounded-xl focus:border-gray-900 outline-none text-sm bg-white"
                   >
-                    <option value="scale">{{ $t('settings.sections.hoverScale') }}</option>
-                    <option value="lift">{{ $t('settings.sections.hoverLift') }}</option>
-                    <option value="glow">{{ $t('settings.sections.hoverGlow') }}</option>
-                    <option value="none">{{ $t('settings.sections.hoverNone') }}</option>
+                    <option value="scale">缩放 (默认)</option>
+                    <option value="lift">上浮</option>
+                    <option value="glow">发光</option>
+                    <option value="none">无</option>
                   </select>
                 </div>
               </div>
             </div>
 
             <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.sections.footerSettings') }}</h4>
+              <h4 class="text-base font-bold mb-4 text-gray-900">页脚设置</h4>
               <div class="space-y-2">
                 <div class="flex items-center justify-between">
-                  <label class="text-sm font-medium text-gray-700">{{ $t('settings.sections.showVisitorStats') }}</label>
+                  <label class="text-sm font-medium text-gray-700">显示访客统计</label>
                   <label class="relative inline-flex items-center cursor-pointer">
                     <input
                       type="checkbox"
@@ -2394,9 +2434,9 @@ watch(activeTab, (val) => {
                 <div class="grid grid-cols-2 gap-4">
                   <div>
                     <label class="text-sm font-medium text-gray-700 mb-1 block"
-                      >{{ $t('settings.sections.footerHeight') }}</label
+                      >页脚高度 (px)</label
                     >
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.sections.footerHeightDesc') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">0 为自适应</div>
                     <input
                       type="number"
                       v-model="store.appConfig.footerHeight"
@@ -2406,9 +2446,9 @@ watch(activeTab, (val) => {
                   </div>
                   <div>
                     <label class="text-sm font-medium text-gray-700 mb-1 block"
-                      >{{ $t('settings.sections.footerContentWidth') }}</label
+                      >页脚内容宽度 (px)</label
                     >
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.sections.footerContentWidthDesc') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">默认 1280</div>
                     <input
                       type="number"
                       v-model="store.appConfig.footerWidth"
@@ -2420,9 +2460,9 @@ watch(activeTab, (val) => {
                 <div class="grid grid-cols-2 gap-4">
                   <div>
                     <label class="text-sm font-medium text-gray-700 mb-1 block"
-                      >{{ $t('settings.sections.footerMarginBottom') }}</label
+                      >页脚距底部 (px)</label
                     >
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.sections.footerMarginBottomDesc') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">调整页脚垂直位置</div>
                     <input
                       type="number"
                       v-model="store.appConfig.footerMarginBottom"
@@ -2432,9 +2472,9 @@ watch(activeTab, (val) => {
                   </div>
                   <div>
                     <label class="text-sm font-medium text-gray-700 mb-1 block"
-                      >{{ $t('settings.sections.footerFontSize') }}</label
+                      >页脚字体大小 (px)</label
                     >
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.sections.footerFontSizeDesc') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">默认 12px</div>
                     <input
                       type="number"
                       v-model="store.appConfig.footerFontSize"
@@ -2445,12 +2485,12 @@ watch(activeTab, (val) => {
                 </div>
                 <div>
                   <label class="text-sm font-medium text-gray-700 mb-1 block"
-                    >{{ $t('settings.sections.customFooterHtml') }}</label
+                    >自定义页脚内容 (HTML)</label
                   >
                   <textarea
                     v-model="store.appConfig.footerHtml"
                     rows="3"
-                    :placeholder="$t('settings.sections.customFooterHtmlPlaceholder')"
+                    placeholder="可输入备案号等信息，支持 HTML 标签"
                     class="w-full px-3 py-2 border border-gray-200 rounded-xl focus:border-gray-900 outline-none text-sm font-mono"
                   ></textarea>
                 </div>
@@ -2461,7 +2501,7 @@ watch(activeTab, (val) => {
           <div v-if="activeTab === 'widgets'" class="space-y-4">
             <div class="flex items-center justify-between mb-4 mr-8">
               <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                {{ $t('settings.sections.desktopWidgets') }}
+                桌面组件
               </h4>
               <div class="flex items-center gap-3 text-xs mr-[10px]">
                 <button
@@ -2485,9 +2525,10 @@ watch(activeTab, (val) => {
             >
               <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div class="space-y-1">
-                  <div class="font-bold">{{ $t('settings.sections.singleWidgetDiagnostic') }}</div>
+                  <div class="font-bold">单开组件数量异常偏少</div>
                   <p class="text-xs leading-relaxed text-amber-800">
-                    {{ $t('settings.sections.singleWidgetDiagnosticDesc', { count: singleOpenWidgets.length, total: store.widgets.length, types: singleWidgetDiagnosticTypes }) }}
+                    当前只检测到 {{ singleOpenWidgets.length }} 个单开组件（总组件
+                    {{ store.widgets.length }} 个）：{{ singleWidgetDiagnosticTypes }}。如果刷新、登录或云端同步后组件突然变少，可能是缓存或远端快照覆盖了本地组件列表。
                   </p>
                 </div>
                 <button
@@ -2515,7 +2556,7 @@ watch(activeTab, (val) => {
                     v-if="isUnknownWidget(w.type)"
                     @click="deleteWidget(w.id)"
                     class="absolute top-1 right-1 w-5 h-5 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-full text-xs transition-colors z-20"
-                    :title="$t('settings.sections.deleteWidget')"
+                    title="删除组件"
                   >
                     ✕
                   </button>
@@ -2524,15 +2565,15 @@ watch(activeTab, (val) => {
                       <div
                         class="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-sm font-medium text-gray-700 shadow-sm"
                       >
-                        {{ $t('settings.widgetAbbr.player') }}
+                        音
                       </div>
-                      <span class="font-bold text-gray-700 text-sm">{{ $t('settings.sections.randomMusic') }}</span>
+                      <span class="font-bold text-gray-700 text-sm">随机音乐</span>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
                       <label
                         class="px-3 py-1.5 text-gray-700 text-xs rounded-lg cursor-pointer transition-colors flex items-center gap-1 whitespace-nowrap glass-chip selectable-outline"
                       >
-                        <span>{{ $t('settings.sections.uploadMusic') }}</span>
+                        <span>上传音乐</span>
                         <input
                           type="file"
                           accept="audio/*"
@@ -2546,18 +2587,18 @@ watch(activeTab, (val) => {
                         @click="toggleMusicManager"
                         class="px-3 py-1.5 text-gray-700 text-xs rounded-lg cursor-pointer transition-colors flex items-center gap-1 whitespace-nowrap glass-chip selectable-outline"
                       >
-                        {{ musicManagerOpen ? $t('settings.sections.collapseFiles') : $t('settings.sections.fileManagement') }} ({{ musicFiles.length }})
+                        {{ musicManagerOpen ? "收起文件" : "文件管理" }} ({{ musicFiles.length }})
                       </button>
                       <span
                         v-if="uploadStatus"
                         class="text-xs"
-                        :class="(uploadStatus.includes(t('settings.messages.uploadFailed')) || uploadStatus.includes('失败')) ? 'text-red-500' : 'text-green-500'"
+                        :class="uploadStatus.includes('失败') ? 'text-red-500' : 'text-green-500'"
                         >{{ uploadStatus }}</span
                       >
                     </div>
                     <div class="flex flex-col items-stretch gap-2 md:items-end">
                       <div class="flex items-center gap-2 justify-end">
-                        <span class="text-xs text-gray-500 whitespace-nowrap">{{ $t('settings.sections.musicVolume') }}</span>
+                        <span class="text-xs text-gray-500 whitespace-nowrap">音量</span>
                         <input
                           v-model.number="musicVolumePercent"
                           type="range"
@@ -2569,10 +2610,10 @@ watch(activeTab, (val) => {
                       </div>
                       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <div class="flex flex-col items-center gap-0.5">
-                          <span class="text-[10px] text-gray-400 scale-90">{{ $t('settings.sections.publicAccess') }}</span>
+                          <span class="text-[10px] text-gray-400 scale-90">公开</span>
                           <label
                             class="relative inline-flex items-center cursor-pointer"
-                            :title="$t('settings.sections.publicAccess')"
+                            title="公开"
                             ><input type="checkbox" v-model="w.isPublic" class="sr-only peer" @change="store.saveData()" />
                             <div
                               class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"
@@ -2580,10 +2621,10 @@ watch(activeTab, (val) => {
                           ></label>
                         </div>
                         <div class="flex flex-col items-center gap-0.5">
-                          <span class="text-[10px] text-gray-400 scale-90">{{ $t('settings.sections.enabled') }}</span>
+                          <span class="text-[10px] text-gray-400 scale-90">启用</span>
                           <label
                             class="relative inline-flex items-center cursor-pointer"
-                            :title="$t('settings.sections.enabled')"
+                            title="启用"
                             ><input type="checkbox" v-model="w.enable" class="sr-only peer" @change="store.saveData()" />
                             <div
                               class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-green-500"
@@ -2591,10 +2632,10 @@ watch(activeTab, (val) => {
                           ></label>
                         </div>
                         <div class="flex flex-col items-center gap-0.5">
-                          <span class="text-[10px] text-gray-400 scale-90">{{ $t('settings.sections.mobileAccess') }}</span>
+                          <span class="text-[10px] text-gray-400 scale-90">手机</span>
                           <label
                             class="relative inline-flex items-center cursor-pointer"
-                            :title="$t('settings.sections.mobileAccess')"
+                            title="手机"
                             ><input
                               type="checkbox"
                               :checked="!w.hideOnMobile"
@@ -2611,10 +2652,10 @@ watch(activeTab, (val) => {
                           ></label>
                         </div>
                         <div class="flex flex-col items-center gap-0.5">
-                          <span class="text-[10px] text-gray-400 scale-90">{{ $t('settings.sections.autoPlay') }}</span>
+                          <span class="text-[10px] text-gray-400 scale-90">自动</span>
                           <label
                             class="relative inline-flex items-center cursor-pointer"
-                            :title="$t('settings.sections.autoPlayTitle')"
+                            title="自动播放"
                             ><input
                               type="checkbox"
                               v-model="store.appConfig.autoPlayMusic"
@@ -2635,21 +2676,21 @@ watch(activeTab, (val) => {
                           class="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs rounded-lg cursor-pointer hover:bg-gray-200 transition-colors flex items-center gap-1 whitespace-nowrap"
                           :disabled="isMusicListLoading"
                         >
-                          {{ isMusicListLoading ? $t('settings.sections.refreshing') : $t('settings.sections.refreshList') }}
+                          {{ isMusicListLoading ? "刷新中..." : "刷新列表" }}
                         </button>
                         <span v-if="musicManagerStatus" class="text-xs text-red-500">{{
                           musicManagerStatus
                         }}</span>
                         <span v-else class="text-xs text-gray-500"
-                          >{{ $t('settings.sections.totalFiles', { count: musicFiles.length }) }}</span
+                          >共 {{ musicFiles.length }} 个文件</span
                         >
                       </div>
                       <div
                         class="border border-gray-100 rounded-xl bg-gray-50 p-3 max-h-44 overflow-auto"
                       >
-                        <div v-if="isMusicListLoading" class="text-xs text-gray-500">{{ $t('settings.extraSections.loadingVersions') }}</div>
+                        <div v-if="isMusicListLoading" class="text-xs text-gray-500">加载中...</div>
                         <div v-else-if="musicFiles.length === 0" class="text-xs text-gray-500">
-                          {{ $t('settings.sections.noMusicFiles') }}
+                          暂无音乐文件
                         </div>
                         <div v-else class="space-y-1">
                           <div
@@ -2663,7 +2704,7 @@ watch(activeTab, (val) => {
                               class="px-2 py-1 rounded-md bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
                               @click="deleteMusicFile(f)"
                             >
-                              {{ $t('settings.sections.delete') }}
+                              删除
                             </button>
                           </div>
                         </div>
@@ -2676,20 +2717,16 @@ watch(activeTab, (val) => {
                       @click="
                         w.type === 'music'
                           ? scrollToMusicSettings()
-                          : w.type === 'system-status'
-                            ? (activeTab = 'docker')
-                            : (editingOpacityId = w.id)
+                          : (editingOpacityId = w.id)
                       "
                       :title="
-                        w.type === 'music' || w.type === 'system-status'
-                          ? $t('settings.sections.clickToSettings')
-                          : $t('settings.sections.clickToStyle')
+                        w.type === 'music' ? '点击进入设置' : '点击调整样式'
                       "
                     >
                       <template v-if="editingOpacityId === w.id">
                         <div class="w-full px-2" @click.stop>
                           <label class="text-[10px] text-gray-500 block mb-1"
-                            >{{ $t('settings.sections.opacity') }}
+                            >透明度
                             {{
                               Math.round((w.opacity ?? (w.type === "search" ? 0.9 : 1)) * 100)
                             }}%</label
@@ -2709,7 +2746,7 @@ watch(activeTab, (val) => {
                             class="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-400"
                           />
                           <div class="flex items-center justify-between mt-2 gap-2">
-                            <label class="text-[10px] text-gray-500">{{ $t('settings.sections.textColor') }}</label>
+                            <label class="text-[10px] text-gray-500">文字颜色</label>
                             <div class="flex items-center gap-2">
                               <input
                                 type="color"
@@ -2724,7 +2761,7 @@ watch(activeTab, (val) => {
                                 "
                                 @change="store.markDirty()"
                                 class="w-5 h-5 p-0 border-0 rounded-full cursor-pointer overflow-hidden shadow-sm"
-                                :title="$t('settings.extraSections.selectColor')"
+                                title="选择颜色"
                               />
                               <button
                                 v-if="w.textColor"
@@ -2733,7 +2770,7 @@ watch(activeTab, (val) => {
                                   store.markDirty();
                                 "
                                 class="text-[10px] text-red-400 hover:text-red-600"
-                                :title="$t('settings.extraSections.resetColor')"
+                                title="重置颜色"
                               >
                                 ✕
                               </button>
@@ -2743,7 +2780,7 @@ watch(activeTab, (val) => {
                             @click.stop="editingOpacityId = null"
                             class="mt-2 text-xs text-gray-600 hover:text-gray-900 w-full text-center border-t border-gray-100 pt-1"
                           >
-                            {{ $t('settings.sections.done') }}
+                            完成
                           </button>
                         </div>
                       </template>
@@ -2757,16 +2794,100 @@ watch(activeTab, (val) => {
                             class="w-6 h-6 object-contain"
                           />
                           <template v-else>
-                            {{ $t(`settings.widgetAbbr.${w.type}`, w.type) }}
+                            {{
+                              w.type === "clock"
+                                ? "时"
+                                : w.type === "weather"
+                                  ? "天"
+                                  : w.type === "clockweather"
+                                    ? "合"
+                                    : w.type === "calendar"
+                                      ? "日"
+                                      : w.type === "memo"
+                                        ? "备"
+                                        : w.type === "search"
+                                          ? "搜"
+                                          : w.type === "quote"
+                                            ? "言"
+                                            : w.type === "bookmarks"
+                                              ? "藏"
+                                              : w.type === "file-transfer"
+                                                ? "传"
+                                                : w.type === "todo"
+                                                  ? "待"
+                                                  : w.type === "calculator"
+                                                    ? "算"
+                                                    : w.type === "ip"
+                                                      ? "IP"
+                                                      : w.type === "player"
+                                                        ? "音"
+                                                        : w.type === "hot"
+                                                          ? "热"
+                                                          : w.type === "rss"
+                                                            ? "阅"
+                                                            : w.type === "sidebar"
+                                                              ? "侧"
+                                                              : w.type === "status-monitor"
+                                                                ? "监"
+                                                                : w.type === "custom-css"
+                                                                  ? "自"
+                                                                  : "组"
+                            }}
                           </template>
                         </div>
                         <span
                           class="font-bold text-gray-700 text-xs leading-snug text-center truncate w-full px-1"
                         >
                           {{
-                            w.type === "custom-css"
-                              ? (w.data?.title || $t('settings.widgetTypes.custom-css'))
-                              : $t(`settings.widgetTypes.${w.type}`, `未知组件 (${w.type})`)
+                            w.type === "clock"
+                              ? "时钟"
+                              : w.type === "weather"
+                                ? "天气"
+                                : w.type === "clockweather"
+                                  ? "时钟+天气"
+                                  : w.type === "sidebar"
+                                    ? "侧边栏"
+                                    : w.type === "calendar"
+                                      ? "日历"
+                                      : w.type === "memo"
+                                        ? "备忘录"
+                                        : w.type === "search"
+                                          ? "聚合搜索"
+                                          : w.type === "quote"
+                                            ? "每日一言"
+                                            : w.type === "bookmarks"
+                                              ? "收藏夹"
+                                              : w.type === "file-transfer"
+                                                ? "文件传输助手"
+                                                : w.type === "todo"
+                                                  ? "待办事项"
+                                                  : w.type === "calculator"
+                                                    ? "计算器"
+                                                    : w.type === "ip"
+                                                      ? "IP 信息"
+                                                      : w.type === "player"
+                                                        ? "随机音乐"
+                                                        : w.type === "hot"
+                                                          ? "全网热搜"
+                                                          : w.type === "rss"
+                                                            ? "RSS 阅读器"
+                                                            : w.type === "status-monitor"
+                                                                ? "状态监控"
+                                                                : w.type === "iframe"
+                                                                  ? "万能窗口"
+                                                                  : w.type === "countdown"
+                                                                    ? "倒计时"
+                                                                    : w.type === "countup"
+                                                                      ? "正计时"
+                                                                      : w.type === "docker"
+                                                                        ? "Docker 管理"
+                                                                        : w.type === "custom-css"
+                                                                          ? w.data?.title || "自定义组件"
+                                                                          : w.type === "music"
+                                                                            ? "道理鱼音乐"
+                                                                            : w.type === "amap-weather"
+                                                                              ? "高德天气"
+                                                                              : `未知组件 (${w.type})`
                           }}
                         </span>
                       </template>
@@ -2868,104 +2989,20 @@ watch(activeTab, (val) => {
             </div>
 
             <div class="space-y-3 mb-6 pb-6 border-b border-gray-100">
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="text-sm font-bold text-gray-900">{{ $t('settings.sections.dockerService') }}</div>
-                  <p class="mt-1 text-xs text-gray-500">
-                    {{ $t('settings.sections.dockerServiceDesc', { windowsSocket: 'npipe:////./pipe/docker_engine', linuxSocket: 'unix:///var/run/docker.sock' }) }}
-                  </p>
-                </div>
-                <label class="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    :checked="isDockerSystemEnabled"
-                    :disabled="isUpdatingDockerSystem || !hasAdminAccess"
-                    :aria-label="$t('settings.extraSections.dockerServiceAriaLabel')"
-                    @change="(e) => toggleDockerSystemEnabled((e.target as HTMLInputElement).checked)"
-                    class="sr-only peer"
-                  />
-                  <div
-                    class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:opacity-50 after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500 shrink-0"
-                  ></div>
-                  <span class="text-sm text-gray-700 ml-3 whitespace-nowrap">
-                    {{ isUpdatingDockerSystem ? $t('settings.sections.switching') : isDockerSystemEnabled ? $t('settings.sections.enabled') : $t('settings.sections.disabled') }}
-                  </span>
-                </label>
-              </div>
-
-              <div
-                class="rounded-xl border px-3 py-2 text-xs"
-                :class="
-                  isDockerSystemEnabled
-                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700'
-                    : 'border-amber-200 bg-amber-50/70 text-amber-700'
-                "
-              >
-                <p>
-                  {{
-                    isDockerSystemEnabled
-                      ? $t('settings.sections.dockerEnabledDesc')
-                      : $t('settings.sections.dockerDisabledDesc')
-                  }}
-                </p>
-                <p class="mt-1 text-[11px] opacity-80">
-                  “Docker 服务”是系统级总开关，“显示 Docker 组件”只影响首页卡片显示，“模拟数据”只影响组件展示数据来源。
-                </p>
-                <p v-if="!hasAdminAccess" class="mt-1 text-[11px] opacity-80">
-                  {{ $t('settings.sections.dockerNote2') }}
-                </p>
-              </div>
-            </div>
-
-            <!-- Host Status Widget Section -->
-            <div class="space-y-3 mb-6 pb-6 border-b border-gray-100">
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-bold text-gray-900">{{ $t('settings.sections.hostStatusWidget') }}</span>
-                <div class="flex items-center gap-4">
-                  <div
-                    v-if="systemStatusWidget && systemStatusWidget.enable"
-                    class="flex items-center gap-2 animate-fade-in"
-                  >
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs text-gray-700 font-medium">{{ $t('settings.sections.publicAccessLabel') }}</span>
-                      <label class="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          v-model="systemStatusWidget.isPublic"
-                          class="sr-only peer"
-                        />
-                        <div
-                          class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"
-                        ></div>
-                      </label>
-                    </div>
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs text-gray-700 font-medium">{{ $t('settings.sections.mobileDisplay') }}</span>
-                      <label class="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          :checked="!systemStatusWidget.hideOnMobile"
-                          @change="onMobileSystemStatusDisplayChange"
-                          class="sr-only peer"
-                        />
-                        <div
-                          class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"
-                        ></div>
-                      </label>
-                    </div>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
+              <!-- 第一行：宿主机状态栏 + 总开关；开关打开后，在其右侧显示 手机端显示 -->
+              <div class="flex flex-wrap items-center gap-y-2">
+                <!-- 左侧标题块定宽：与下一行 Docker 服务的标题块同宽，使两行“公开访问”左边缘对齐 -->
+                <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                  <div class="text-sm font-bold text-gray-900">宿主机状态栏</div>
+                  <label class="relative inline-flex items-center cursor-pointer shrink-0">
                     <input
                       type="checkbox"
-                      :checked="systemStatusWidget?.enable"
-                      :aria-label="$t('settings.sections.enabled')"
+                      :checked="!!sysStatusGroup"
+                      aria-label="宿主机状态栏启用"
                       @change="
                         (e) => {
                           if ((e.target as HTMLInputElement).checked) enableSystemStatusWidget();
-                          else if (systemStatusWidget) {
-                            systemStatusWidget.enable = false;
-                            store.markDirty();
-                          }
+                          else disableSystemStatusGroup();
                         }
                       "
                       class="sr-only peer"
@@ -2973,44 +3010,55 @@ watch(activeTab, (val) => {
                     <div
                       class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"
                     ></div>
-                    <span class="text-sm text-gray-700 ml-3">{{ $t('settings.sections.enabled') }}</span>
                   </label>
                 </div>
-              </div>
-
-              <div
-                v-if="systemStatusWidget && systemStatusWidget.enable"
-                class="animate-fade-in space-y-3"
-              >
-                <div class="flex flex-wrap items-center gap-4 border-t border-gray-100 pt-3">
+                <!-- 开关打开后：手机端显示（显示在主开关右侧）。
+                     公开访问开关已删除：公开与否以卡片 isPublic 为准（批量走分组设置）。
+                     手机端显示改绑"系统状态"分组的 hideOnMobile（旧 widget 已退役，绑它无效）。 -->
+                <div
+                  v-if="sysStatusGroup"
+                  class="flex items-center gap-4 animate-fade-in"
+                >
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-gray-500">{{ $t('settings.sections.useMockData') }}</span>
+                    <span class="text-xs text-gray-700 font-medium">手机端显示</span>
                     <label class="relative inline-flex items-center cursor-pointer">
                       <input
                         type="checkbox"
-                        :checked="!!systemStatusWidget.data?.useMock"
-                        @change="
-                          (e) => toggleSystemStatusMock((e.target as HTMLInputElement).checked)
-                        "
+                        :checked="!sysStatusGroup.hideOnMobile"
+                        @change="onMobileSystemStatusDisplayChange"
                         class="sr-only peer"
                       />
                       <div
-                        class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"
+                        class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"
                       ></div>
                     </label>
                   </div>
                 </div>
-                <div class="h-40 w-full max-w-sm">
-                  <SystemStatusWidget :widget="systemStatusWidget" />
-                </div>
               </div>
             </div>
+            <!-- 旧 system-status 大卡片 widget 已删除（被"系统状态"分组取代）：
+                 原这里的"使用模拟数据"开关和预览随之移除 -->
 
             <div class="space-y-4">
               <!-- 未启用时的提示 -->
               <template v-if="!isDockerComponentCreated">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-bold text-gray-900">{{ $t('settings.sections.containerManagement') }}</span>
+                <div class="flex items-center">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                    <div class="text-sm font-bold text-gray-900">Docker 服务</div>
+                    <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        :checked="isDockerSystemEnabled"
+                        :disabled="isUpdatingDockerSystem || !hasAdminAccess"
+                        aria-label="Docker 服务启用"
+                        @change="(e) => toggleDockerSystemEnabled((e.target as HTMLInputElement).checked)"
+                        class="sr-only peer"
+                      />
+                      <div
+                        class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:opacity-50 after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500 shrink-0"
+                      ></div>
+                    </label>
+                  </div>
                   <button
                     @click="enableDockerWidget"
                     class="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-black transition-colors shadow-sm text-sm"
@@ -3023,42 +3071,48 @@ watch(activeTab, (val) => {
               <!-- 已启用后的管理区 -->
               <template v-else>
                 <!-- 主控制区 -->
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-bold text-gray-900">容器管理</span>
-                  <div class="flex items-center gap-4">
-                    <div class="flex items-center gap-4 animate-fade-in">
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-gray-700 font-medium">公开访问</span>
-                        <label class="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" v-model="dockerWidget.isPublic" class="sr-only peer" />
-                          <div
-                            class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"
-                          ></div>
-                        </label>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-gray-700 font-medium">手机端显示</span>
-                        <label class="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" :checked="!dockerWidget.hideOnMobile" @change="onMobileDockerDisplayChange" class="sr-only peer" />
-                          <div
-                            class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"
-                          ></div>
-                        </label>
-                      </div>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" v-model="dockerWidget.enable" :aria-label="$t('settings.sections.containerManagementWidget')" class="sr-only peer" />
-                      <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
-                      <span class="text-sm text-gray-700 ml-3">{{ $t('settings.sections.containerManagementWidget') }}</span>
+                <div class="flex items-center">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                    <div class="text-sm font-bold text-gray-900">Docker 服务</div>
+                    <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        :checked="isDockerSystemEnabled"
+                        :disabled="isUpdatingDockerSystem || !hasAdminAccess"
+                        aria-label="Docker 服务启用"
+                        @change="(e) => toggleDockerSystemEnabled((e.target as HTMLInputElement).checked)"
+                        class="sr-only peer"
+                      />
+                      <div
+                        class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:opacity-50 after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500 shrink-0"
+                      ></div>
                     </label>
                   </div>
+                  <!-- 内网主机（显示在 Docker 服务开关右侧） -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-700 font-medium">内网主机</span>
+                    <input
+                      :value="dockerWidget?.data?.lanHost"
+                      @change="
+                        (e) => {
+                          if (!dockerWidget.data) dockerWidget.data = {};
+                          dockerWidget.data.lanHost = (e.target as HTMLInputElement).value;
+                          store.markDirty();
+                        }
+                      "
+                      type="text"
+                      placeholder="例如：192.168.1.10"
+                      class="px-2 py-1 border border-gray-200 rounded text-xs focus:border-gray-900 outline-none"
+                    />
+                  </div>
+                  <!-- Docker 服务行只保留总开关；公开访问/手机端显示移到下面"容器管理组件"行 -->
                 </div>
 
                 <!-- 功能配置区 -->
                 <div class="flex flex-wrap items-center gap-4 border-t border-gray-100 pt-3">
                   <!-- 模拟数据 -->
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-gray-500">{{ $t('settings.sections.mockData') }}</span>
+                    <span class="text-xs text-gray-500">模拟数据</span>
                     <label class="relative inline-flex items-center cursor-pointer">
                       <input
                         type="checkbox"
@@ -3074,7 +3128,7 @@ watch(activeTab, (val) => {
 
                   <!-- 自动升级 -->
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-gray-500">{{ $t('settings.sections.autoUpdate') }}</span>
+                    <span class="text-xs text-gray-500">自动升级</span>
                     <label class="relative inline-flex items-center cursor-pointer">
                       <input
                         type="checkbox"
@@ -3096,7 +3150,7 @@ watch(activeTab, (val) => {
 
                   <!-- 升级配置 -->
                   <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-gray-500">{{ $t('settings.extraSections.keepVersions') }}</span>
+                    <span class="text-[10px] text-gray-500">保留版本</span>
                     <input
                       type="number"
                       min="1"
@@ -3115,11 +3169,11 @@ watch(activeTab, (val) => {
                       "
                       class="w-16 px-2 py-1 border border-gray-200 rounded text-xs focus:border-gray-900 outline-none disabled:bg-gray-50 disabled:text-gray-400"
                     />
-                    <span class="text-[10px] text-gray-500">{{ $t('settings.extraSections.unitCount') }}</span>
+                    <span class="text-[10px] text-gray-500">个</span>
                   </div>
 
                   <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-gray-500">{{ $t('settings.extraSections.diskThreshold') }}</span>
+                    <span class="text-[10px] text-gray-500">磁盘阈值</span>
                     <input
                       type="number"
                       min="0"
@@ -3140,23 +3194,49 @@ watch(activeTab, (val) => {
                     />
                     <span class="text-[10px] text-gray-500">GB</span>
                   </div>
+                </div>
 
-                  <!-- 内网主机 -->
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs text-gray-700 font-medium">{{ $t('settings.extraSections.intranetHost') }}</span>
-                    <input
-                      :value="dockerWidget?.data?.lanHost"
-                      @change="
-                        (e) => {
-                          if (!dockerWidget.data) dockerWidget.data = {};
-                          dockerWidget.data.lanHost = (e.target as HTMLInputElement).value;
-                          store.markDirty();
-                        }
-                      "
-                      type="text"
-                      :placeholder="$t('settings.extraSections.placeholderIntranetHost')"
-                      class="px-2 py-1 border border-gray-200 rounded text-xs focus:border-gray-900 outline-none"
-                    />
+                <!-- 容器管理组件行（照 sun-panel 样式）：组件开关 + 公开访问/手机端显示，
+                     三者控制的都是 DockerWidget 本体（enable/isPublic/hideOnMobile） -->
+                <div class="flex flex-wrap items-center gap-y-2 border-t border-gray-100 pt-3">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                    <div class="text-sm font-bold text-gray-900">容器管理组件</div>
+                    <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        v-model="dockerWidget.enable"
+                        aria-label="容器管理组件启用"
+                        class="sr-only peer"
+                      />
+                      <div
+                        class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"
+                      ></div>
+                    </label>
+                  </div>
+                  <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-gray-700 font-medium">公开访问</span>
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" v-model="dockerWidget.isPublic" class="sr-only peer" />
+                        <div
+                          class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"
+                        ></div>
+                      </label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-gray-700 font-medium">手机端显示</span>
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          :checked="!dockerWidget.hideOnMobile"
+                          @change="onMobileDockerDisplayChange"
+                          class="sr-only peer"
+                        />
+                        <div
+                          class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"
+                        ></div>
+                      </label>
+                    </div>
                   </div>
                 </div>
 
@@ -3173,9 +3253,9 @@ watch(activeTab, (val) => {
                     class="h-[160px] rounded-2xl border border-dashed border-gray-200 bg-gray-50/80 flex items-center justify-center text-center px-6"
                   >
                     <div class="text-sm text-gray-500 space-y-2">
-                      <p>{{ $t('settings.extraSections.dockerServiceClosed') }}</p>
+                      <p>Docker 服务总开关已关闭，请在上方"Docker 服务"区域开启。</p>
                       <p class="text-xs text-gray-400">
-                        {{ $t('settings.extraSections.dockerServiceClosedDesc') }}
+                        关闭系统级总开关后，不会继续自动探测 Docker 或轮询容器状态。
                       </p>
                     </div>
                   </div>
@@ -3184,19 +3264,19 @@ watch(activeTab, (val) => {
             </div>
           </div>
 
-          <div v-if="activeTab === 'universal-window'" class="flatnas-handshake-signal space-y-4">
+          <div v-if="isTab('universal-window')" class="flatnas-handshake-signal space-y-4">
             <!-- Universal Window Widget Section -->
             <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-4">
               <div class="flex items-center gap-2">
                 <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                  {{ $t('settings.extraSections.universalWindow') }}
+                  万能窗口
                 </h4>
-                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">{{ $t('settings.extraSections.multiOpen') }}</span>
+                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">可多开</span>
                 <button
                   @click="addIframeWidget"
                   class="px-3 py-1.5 text-xs font-medium text-gray-900 rounded-lg transition-colors flex items-center gap-1 ml-2 glass-chip selectable-outline"
                 >
-                  <span class="text-base leading-none">+</span> {{ $t('settings.extraSections.addWindow') }}
+                  <span class="text-base leading-none">+</span> 新增窗口
                 </button>
               </div>
             </div>
@@ -3211,10 +3291,10 @@ watch(activeTab, (val) => {
                     <div
                       class="w-10 h-10 rounded-full bg-white flex items-center justify-center text-sm font-medium text-gray-700 shadow-sm"
                     >
-                      {{ $t('settings.widgetAbbr.iframe') }}
+                      窗
                     </div>
                     <div class="flex flex-col">
-                      <span class="font-bold text-gray-700">{{ $t('settings.extraSections.universalWindow') }}</span>
+                      <span class="font-bold text-gray-700">万能窗口</span>
                       <span class="text-[10px] text-gray-400 font-mono">ID: {{ w.id }}</span>
                     </div>
                   </div>
@@ -3222,12 +3302,12 @@ watch(activeTab, (val) => {
                     <button
                       @click="removeWidget(w.id)"
                       class="text-red-400 hover:text-red-600 text-xs underline px-2"
-                      :title="$t('settings.extraSections.deleteWindow')"
+                      title="删除此窗口"
                     >
-                      {{ $t('settings.extraSections.modalDelete') }}
+                      删除
                     </button>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.publicAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">公开</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3240,7 +3320,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.mobileAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">手机</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3258,7 +3338,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.enabled') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">启用</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3276,7 +3356,7 @@ watch(activeTab, (val) => {
                   <div>
                     <div class="flex justify-between items-center mb-1">
                       <label class="block text-xs font-bold text-gray-600"
-                        >{{ $t('settings.extraSections.publicNetworkUrl') }}</label
+                        >外网/默认地址 (URL)</label
                       >
                       <ProxyToggle v-model="w.data.useProxy" @update:model-value="store.markDirty()" />
                     </div>
@@ -3288,7 +3368,7 @@ watch(activeTab, (val) => {
                             updateTempInput(`${w.id}-url`, (e.target as HTMLInputElement).value)
                         "
                         type="url"
-                        :placeholder="$t('settings.extraSections.placeholderExampleUrl')"
+                        placeholder="例如：https://example.com"
                         class="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-xs focus:border-gray-900 outline-none"
                         @keydown.enter="confirmTempInput(w, 'url', `${w.id}-url`)"
                       />
@@ -3296,7 +3376,7 @@ watch(activeTab, (val) => {
                         @click="confirmTempInput(w, 'url', `${w.id}-url`)"
                         class="px-3 py-2 bg-yellow-500 text-white rounded-lg text-xs font-bold hover:bg-yellow-600 transition-colors whitespace-nowrap"
                       >
-                        {{ $t('settings.extraSections.modalConfirm') }}
+                        确定
                       </button>
                     </div>
                   </div>
@@ -3304,9 +3384,9 @@ watch(activeTab, (val) => {
                     <label
                       class="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1"
                     >
-                      <span>{{ $t('settings.extraSections.lanUrlLabel') }}</span>
+                      <span>内网地址 (LAN URL)</span>
                       <span class="text-[10px] font-normal text-gray-400 px-1.5 rounded glass-chip selected-outline"
-                        >{{ $t('settings.extraSections.lanPriority') }}</span
+                        >内网优先</span
                       >
                     </label>
                     <div class="flex gap-2">
@@ -3317,7 +3397,7 @@ watch(activeTab, (val) => {
                             updateTempInput(`${w.id}-lanUrl`, (e.target as HTMLInputElement).value)
                         "
                         type="url"
-                        :placeholder="$t('settings.extraSections.placeholderLanUrl')"
+                        placeholder="例如：http://192.168.x.x"
                         class="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-xs focus:border-gray-900 outline-none"
                         @keydown.enter="confirmTempInput(w, 'lanUrl', `${w.id}-lanUrl`)"
                       />
@@ -3335,11 +3415,11 @@ watch(activeTab, (val) => {
                       download="flatnas-helper.zip"
                       target="_blank"
                       class="text-blue-500 underline mx-1"
-                      >{{ $t('settings.extraSections.downloadBrowserPlugin') }}</a
-                    >{{ $t('settings.extraSections.removeRestriction') }}
+                      >下载浏览器插件</a
+                    >解除限制
                   </p>
                   <p class="text-[10px] text-gray-400 mt-1">
-                    {{ $t('settings.extraSections.networkSwitchHint') }}
+                    系统将根据当前网络环境自动切换：内网环境优先使用内网地址，外网环境使用默认地址。
                   </p>
                 </div>
               </div>
@@ -3349,14 +3429,14 @@ watch(activeTab, (val) => {
             <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-4 mt-8">
               <div class="flex items-center gap-2">
                 <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                  {{ $t('settings.extraSections.amapWeatherFull') }}
+                  高德天气
                 </h4>
-                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">{{ $t('settings.extraSections.multiOpen') }}</span>
+                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">可多开</span>
                 <button
                   @click="addAmapWeatherWidget"
                   class="px-3 py-1.5 text-xs font-medium text-gray-900 rounded-lg transition-colors flex items-center gap-1 ml-2 glass-chip selectable-outline"
                 >
-                  <span class="text-base leading-none">+</span> {{ $t('settings.extraSections.addWeatherWidget') }}
+                  <span class="text-base leading-none">+</span> 新增天气
                 </button>
               </div>
             </div>
@@ -3371,10 +3451,10 @@ watch(activeTab, (val) => {
                     <div
                       class="w-10 h-10 rounded-full bg-white flex items-center justify-center text-sm font-medium text-gray-700 shadow-sm"
                     >
-                      {{ $t('settings.widgetAbbr.amap-weather') }}
+                      天
                     </div>
                     <div class="flex flex-col">
-                      <span class="font-bold text-gray-700">{{ $t('settings.extraSections.amapWeatherFull') }}</span>
+                      <span class="font-bold text-gray-700">高德天气</span>
                       <span class="text-[10px] text-gray-400 font-mono">ID: {{ w.id }}</span>
                     </div>
                   </div>
@@ -3382,12 +3462,12 @@ watch(activeTab, (val) => {
                     <button
                       @click="removeWidget(w.id)"
                       class="text-gray-400 hover:text-gray-900 text-xs underline px-2"
-                      :title="$t('settings.extraSections.deleteComponent')"
+                      title="删除此组件"
                     >
                       删除
                     </button>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.publicAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">公开</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3400,7 +3480,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.mobileAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">手机</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3418,7 +3498,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.enabled') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">启用</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3439,14 +3519,14 @@ watch(activeTab, (val) => {
             <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-4 mt-8">
               <div class="flex items-center gap-2">
                 <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                  {{ $t('settings.extraSections.countdownSection') }}
+                  倒计时
                 </h4>
-                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">{{ $t('settings.extraSections.multiOpen') }}</span>
+                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">可多开</span>
                 <button
                   @click="addCountdownWidget"
                   class="px-3 py-1.5 text-xs font-medium text-gray-900 rounded-lg transition-colors flex items-center gap-1 ml-2 glass-chip selectable-outline"
                 >
-                  <span class="text-base leading-none">+</span> {{ $t('settings.extraSections.addCountdown') }}
+                  <span class="text-base leading-none">+</span> 新增倒计时
                 </button>
               </div>
             </div>
@@ -3459,11 +3539,12 @@ watch(activeTab, (val) => {
                 <div class="flex items-center justify-between">
                   <div class="flex items-center gap-4">
                     <div
-                      class="w-10 h-10 rounded-full bg-white flex items-center justify-center text-sm font-medium text-gray-700 shadow-sm">
-                      {{ $t('settings.widgetAbbr.countdown') }}
+                      class="w-10 h-10 rounded-full bg-white flex items-center justify-center text-sm font-medium text-gray-700 shadow-sm"
+                    >
+                      计
                     </div>
                     <div class="flex flex-col">
-                      <span class="font-bold text-gray-700">{{ $t('settings.extraSections.countdownSection') }}</span>
+                      <span class="font-bold text-gray-700">倒计时</span>
                       <span class="text-[10px] text-gray-400 font-mono">ID: {{ w.id }}</span>
                     </div>
                   </div>
@@ -3471,12 +3552,12 @@ watch(activeTab, (val) => {
                     <button
                       @click="removeWidget(w.id)"
                       class="text-gray-400 hover:text-gray-900 text-xs underline px-2"
-                      :title="$t('settings.extraSections.deleteComponent')"
+                      title="删除此组件"
                     >
                       删除
                     </button>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.publicAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">公开</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3489,7 +3570,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.mobileAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">手机</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3507,7 +3588,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.enabled') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">启用</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3527,7 +3608,7 @@ watch(activeTab, (val) => {
                     <input
                       v-model="w.data.title"
                       type="text"
-                      :placeholder="$t('settings.extraSections.placeholderCountdownTitle')"
+                      placeholder="例如：春节"
                       class="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs focus:border-gray-900 outline-none"
                     />
                   </div>
@@ -3547,14 +3628,14 @@ watch(activeTab, (val) => {
             <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-4 mt-8">
               <div class="flex items-center gap-2">
                 <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                  {{ $t('settings.extraSections.countupSection') }}
+                  正计时
                 </h4>
-                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">{{ $t('settings.extraSections.multiOpen') }}</span>
+                <span class="text-xs text-gray-500 px-2 py-1 rounded-full glass-chip selected-outline">可多开</span>
                 <button
                   @click="addCountUpWidget"
                   class="px-3 py-1.5 text-xs font-medium text-gray-900 rounded-lg transition-colors flex items-center gap-1 ml-2 glass-chip selectable-outline"
                 >
-                  <span class="text-base leading-none">+</span> {{ $t('settings.extraSections.addCountup') }}
+                  <span class="text-base leading-none">+</span> 新增正计时
                 </button>
               </div>
             </div>
@@ -3572,7 +3653,7 @@ watch(activeTab, (val) => {
                       正
                     </div>
                     <div class="flex flex-col">
-                      <span class="font-bold text-gray-700">{{ $t('settings.extraSections.countupSection') }}</span>
+                      <span class="font-bold text-gray-700">正计时</span>
                       <span class="text-[10px] text-gray-400 font-mono">ID: {{ w.id }}</span>
                     </div>
                   </div>
@@ -3580,12 +3661,12 @@ watch(activeTab, (val) => {
                     <button
                       @click="removeWidget(w.id)"
                       class="text-gray-400 hover:text-gray-900 text-xs underline px-2"
-                      :title="$t('settings.extraSections.deleteComponent')"
+                      title="删除此组件"
                     >
                       删除
                     </button>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.publicAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">公开</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3598,7 +3679,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.mobileAccess') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">手机</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3616,7 +3697,7 @@ watch(activeTab, (val) => {
                       ></label>
                     </div>
                     <div class="flex flex-col items-end gap-1">
-                      <span class="text-[10px] text-gray-400 font-medium">{{ $t('settings.sections.enabled') }}</span
+                      <span class="text-[10px] text-gray-400 font-medium">启用</span
                       ><label class="relative inline-flex items-center cursor-pointer"
                         ><input
                           type="checkbox"
@@ -3636,7 +3717,7 @@ watch(activeTab, (val) => {
                     <input
                       v-model="w.data.title"
                       type="text"
-                      :placeholder="$t('settings.extraSections.placeholderCountupTitle')"
+                      placeholder="例如：工作时长"
                       class="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs focus:border-gray-900 outline-none"
                     />
                   </div>
@@ -3654,10 +3735,10 @@ watch(activeTab, (val) => {
             </template>
           </div>
 
-          <div v-if="activeTab === 'network'" class="p-4 space-y-4">
+          <div v-if="isTab('network')" class="p-4 space-y-4">
             <div class="flex items-center gap-3 mb-4">
               <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                {{ $t('settings.extraSections.networkDetectionSettings') }}
+                网络环境判定设置
               </h4>
             </div>
 
@@ -3668,24 +3749,26 @@ watch(activeTab, (val) => {
                   >注</span
                 >
                 <p class="text-xs text-gray-600 leading-relaxed">
-                  {{ $t('settings.extraSections.domainWhitelistHint') }}
+                  输入域名白名单（每行一个域名）。访问白名单域名时，会根据延迟自动判定：
+                  <b>延迟低 = 内网</b>，<b>延迟高 = 外网</b>。
+                  不在白名单中的域名会直接判定为外网。
                 </p>
               </div>
 
               <div class="space-y-2">
-                <label class="block text-sm font-medium text-gray-700">{{ $t('settings.extraSections.domainWhitelist') }}</label>
+                <label class="block text-sm font-medium text-gray-700">域名白名单</label>
                 <textarea
                   v-model="store.appConfig.internalDomains"
                   @change="store.markDirty()"
                   rows="5"
                   class="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs focus:border-gray-900 outline-none font-mono"
-                  :placeholder="$t('settings.extraSections.placeholderDomainWhitelist')"
+                  placeholder="每行一个域名（如 hp.fnos996.top 或 fnos996.top）"
                 ></textarea>
               </div>
             </div>
 
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4">
-              <h5 class="text-sm font-medium text-gray-700 mb-3">{{ $t('settings.extraSections.whitelistLatencyMode') }}</h5>
+              <h5 class="text-sm font-medium text-gray-700 mb-3">白名单+延迟判定</h5>
               <div class="flex items-center gap-3 mb-3">
                 <button
                   type="button"
@@ -3697,10 +3780,10 @@ watch(activeTab, (val) => {
                       : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                   "
                 >
-                  {{ whitelistLatencyEnabled ? $t('settings.extraSections.whitelistLatencyEnabled') : $t('settings.extraSections.enableWhitelistLatency') }}
+                  {{ whitelistLatencyEnabled ? '已启用' : '启用白名单+延迟判定' }}
                 </button>
                 <span class="text-[11px] text-gray-500">
-                  {{ whitelistLatencyEnabled ? $t('settings.extraSections.whitelistLatencyDesc') : $t('settings.extraSections.whitelistLatencyDisabledDesc') }}
+                  {{ whitelistLatencyEnabled ? '白名单域名将根据延迟判定内外网' : '白名单域名默认判定为外网' }}
                 </span>
               </div>
               <div v-if="whitelistLatencyEnabled" class="flex items-center gap-2">
@@ -3730,17 +3813,17 @@ watch(activeTab, (val) => {
                       : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                   "
                 >
-                  {{ $t('settings.extraSections.confirmApplyDefaults') }}
+                  确认
                 </button>
                 <button
                   type="button"
                   @click="resetLatencyThreshold"
                   class="px-3 py-2 bg-white text-gray-600 border border-gray-200 rounded-lg text-xs font-bold hover:bg-gray-50 transition-colors whitespace-nowrap"
                 >
-                  {{ $t('settings.extraSections.resetToDefault') }}
+                  重置
                 </button>
                 <div class="text-[10px] text-gray-400">
-                  {{ $t('settings.extraSections.defaultLatency', { ms: DEFAULT_LATENCY_THRESHOLD_MS }) }}
+                  默认 {{ DEFAULT_LATENCY_THRESHOLD_MS }} ms
                 </div>
               </div>
               <p
@@ -3753,24 +3836,24 @@ watch(activeTab, (val) => {
                 {{ latencyThresholdAppliedToast }}
               </p>
               <p v-else class="mt-2 text-[11px] text-gray-500">
-                {{ $t('settings.extraSections.latencyThresholdDesc', { ms: DEFAULT_LATENCY_THRESHOLD_MS }) }}
+                白名单域名访问时，延迟低于此值判定为内网，高于此值判定为外网。默认 {{ DEFAULT_LATENCY_THRESHOLD_MS }} ms。
               </p>
             </div>
           </div>
 
-          <div v-if="activeTab === 'lucky-stun'" class="p-4 space-y-4">
+          <div v-if="isTab('lucky-stun')" class="p-4 space-y-4">
             <div class="flex items-center gap-2 mb-4">
               <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
-                {{ $t('settings.tabs.luckyStun') }}
+                开放中心
               </h4>
             </div>
 
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-6 space-y-3">
               <div class="flex items-center justify-between gap-3">
                 <div>
-                  <h4 class="text-base font-bold text-gray-900">{{ $t('settings.extraSections.browserHelperComms') }}</h4>
+                  <h4 class="text-base font-bold text-gray-900">浏览器助手通信</h4>
                   <p class="text-xs text-gray-500 mt-1">
-                    {{ $t('settings.extraSections.browserHelperDesc') }}
+                    为 `flatnas-helper` 生成专用握手链接。插件在当前页点击图标时会优先读取它并自动保存站点与令牌。
                   </p>
                 </div>
               </div>
@@ -3808,11 +3891,11 @@ watch(activeTab, (val) => {
                   </a>
                 </div>
                 <p class="text-[11px] text-gray-500">
-                  {{ $t('settings.extraSections.helperNotDetected') }}
+                  如果插件提示未连接，请先停留在这个页面，再点击浏览器助手图标进行自动配对。
                 </p>
               </template>
               <p v-else class="text-[11px] text-amber-600">
-                {{ $t('settings.extraSections.noLoginToken') }}
+                当前未检测到登录令牌。请先登录 FlatNas，随后这里会自动生成浏览器助手握手链接。
               </p>
             </div>
 
@@ -3820,7 +3903,7 @@ watch(activeTab, (val) => {
             <!-- Music Widget Settings -->
             <div id="music-settings" class="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-6">
               <div class="flex items-center justify-between mb-4">
-                <h4 class="text-base font-bold text-gray-900">{{ $t('settings.extraSections.musicSettings') }}</h4>
+                <h4 class="text-base font-bold text-gray-900">道理鱼音乐设置</h4>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
@@ -3843,35 +3926,35 @@ watch(activeTab, (val) => {
 
               <div v-if="musicWidget && musicWidget.data" class="space-y-3 animate-fade-in">
                 <div>
-                  <label class="block text-xs font-bold text-gray-600 mb-1">{{ $t('settings.extraSections.apiAddress') }}</label>
+                  <label class="block text-xs font-bold text-gray-600 mb-1">API 地址</label>
                   <input
                     v-model="musicWidget.data.apiUrl"
                     @change="store.markDirty()"
                     class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-gray-900 outline-none"
-                    :placeholder="$t('settings.extraSections.placeholderMusicApiUrl')"
+                    placeholder="例如：http://192.168.1.10:3000"
                   />
                 </div>
 
                 <div class="grid grid-cols-2 gap-3">
                   <div>
-                    <label class="block text-xs font-bold text-gray-600 mb-1">{{ $t('settings.sections.username') }}</label>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">用户名</label>
                     <input
                       v-model="musicWidget.data.username"
                       @change="store.markDirty()"
                       type="text"
                       class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-gray-900 outline-none"
-                      :placeholder="$t('settings.extraSections.placeholderUsername')"
+                      placeholder="用户名"
                       autocomplete="off"
                     />
                   </div>
                   <div>
-                    <label class="block text-xs font-bold text-gray-600 mb-1">{{ $t('settings.sections.password') }}</label>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">密码</label>
                     <input
                       v-model="musicWidget.data.password"
                       @change="store.markDirty()"
                       type="password"
                       class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-gray-900 outline-none"
-                      :placeholder="$t('settings.extraSections.placeholderPassword')"
+                      placeholder="密码"
                       autocomplete="new-password"
                     />
                   </div>
@@ -3884,7 +3967,7 @@ watch(activeTab, (val) => {
                     :disabled="isTestingMusicAuth"
                   >
                     <span v-if="isTestingMusicAuth" class="animate-spin text-xs">●</span>
-                    {{ isTestingMusicAuth ? $t('settings.extraSections.loggingIn') : $t('settings.extraSections.loginAndTest') }}
+                    {{ isTestingMusicAuth ? "登录中..." : "登录 & 测试连接" }}
                   </button>
                   <span
                     v-if="testMusicAuthResult"
@@ -3894,7 +3977,7 @@ watch(activeTab, (val) => {
                     {{ testMusicAuthResult.message }}
                   </span>
                   <span class="text-[15px] text-gray-400"
-                    >{{ $t('settings.extraSections.musicSettingsTip') }}</span
+                    >TIPS:道理鱼歌词不准管我FlatNas什么事</span
                   >
                 </div>
 
@@ -3936,14 +4019,14 @@ watch(activeTab, (val) => {
                           class="text-xs text-gray-500 hover:text-gray-900 shrink-0"
                           :disabled="isUpdatingProfile"
                         >
-                          {{ $t('settings.extraSections.editProfile') }}
+                          编辑
                         </button>
                       </div>
                       <div class="text-[10px] text-gray-500 truncate">
                         {{
                           musicWidget.data.userProfile?.id
                             ? `ID: ${musicWidget.data.userProfile.id}`
-                            : $t('settings.extraSections.notFetchedProfile')
+                            : "未获取到资料"
                         }}
                       </div>
                     </div>
@@ -3961,13 +4044,13 @@ watch(activeTab, (val) => {
                       "
                       class="px-3 py-1.5 bg-gray-100 border border-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-200 transition-colors"
                     >
-                      {{ $t('settings.extraSections.logoutMusic') }}
+                      登出
                     </button>
                   </div>
                 </div>
 
                 <div>
-                  <label class="block text-xs font-bold text-gray-600 mb-2">{{ $t('settings.extraSections.componentSize') }}</label>
+                  <label class="block text-xs font-bold text-gray-600 mb-2">组件尺寸</label>
                   <div class="flex items-center gap-4">
                     <div class="flex gap-3">
                       <label class="flex items-center gap-2 cursor-pointer">
@@ -3978,7 +4061,7 @@ watch(activeTab, (val) => {
                           @change="selectedMusicSize = { cols: 1, rows: 1 }"
                           class="text-gray-900 accent-blue-400"
                         />
-                        <span class="text-sm">{{ $t('settings.extraSections.mini') }}</span>
+                        <span class="text-sm">迷你 (1x1)</span>
                       </label>
                       <label class="flex items-center gap-2 cursor-pointer">
                         <input
@@ -3988,7 +4071,7 @@ watch(activeTab, (val) => {
                           @change="selectedMusicSize = { cols: 2, rows: 3 }"
                           class="text-gray-900 accent-blue-400"
                         />
-                        <span class="text-sm">{{ $t('settings.extraSections.standard') }}</span>
+                        <span class="text-sm">标准 (2x3)</span>
                       </label>
                     </div>
                     <button
@@ -4008,7 +4091,7 @@ watch(activeTab, (val) => {
 
             <!-- Custom CSS Section -->
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-6">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.extraSections.customCss') }}</h4>
+              <h4 class="text-base font-bold mb-4 text-gray-900">自定义 CSS</h4>
               <div>
                 <ScriptManager
                   v-if="store.appConfig.customCssList"
@@ -4021,16 +4104,16 @@ watch(activeTab, (val) => {
                   @change="store.updateCustomScripts()"
                 />
                 <div class="text-xs text-gray-500 mt-2">
-                  {{ $t('settings.extraSections.customCssTip') }}
+                  提示：在此处输入的 CSS 将直接应用到页面，可用于微调样式。
                 </div>
                 <div class="mt-3 rounded-xl border border-gray-100 bg-white/70">
-                  <div class="px-3 py-2 text-xs font-bold text-gray-700">{{ $t('settings.extraSections.styleVariableTable') }}</div>
+                  <div class="px-3 py-2 text-xs font-bold text-gray-700">样式变量表</div>
                   <div
                     class="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] gap-y-2 gap-x-3 px-3 pb-3 text-xs"
                   >
-                    <div class="text-[10px] font-semibold text-gray-400">{{ $t('settings.extraSections.styleVarName') }}</div>
-                    <div class="text-[10px] font-semibold text-gray-400">{{ $t('settings.extraSections.styleVarDesc') }}</div>
-                    <div class="text-[10px] font-semibold text-gray-400">{{ $t('settings.extraSections.styleVarValue') }}</div>
+                    <div class="text-[10px] font-semibold text-gray-400">变量</div>
+                    <div class="text-[10px] font-semibold text-gray-400">用途</div>
+                    <div class="text-[10px] font-semibold text-gray-400">当前值</div>
                     <template v-for="row in styleVariableRows" :key="row.name">
                       <div class="font-mono text-[11px] text-gray-700">{{ row.name }}</div>
                       <div class="text-gray-500">{{ row.desc }}</div>
@@ -4040,8 +4123,8 @@ watch(activeTab, (val) => {
                   <div
                     class="flex items-center justify-between px-3 py-2 border-t border-gray-100 text-[10px] text-gray-500"
                   >
-                    <span>{{ $t('settings.extraSections.styleVarContrast') }}{{ styleVariableStatus.contrast }}</span>
-                    <span>{{ $t('settings.extraSections.styleVarVisual') }}{{ styleVariableStatus.visual }}</span>
+                    <span>对比度：{{ styleVariableStatus.contrast }}</span>
+                    <span>视觉回归：{{ styleVariableStatus.visual }}</span>
                   </div>
                 </div>
               </div>
@@ -4049,23 +4132,23 @@ watch(activeTab, (val) => {
 
             <!-- Custom JS Section -->
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-6">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.extraSections.customJs') }}</h4>
+              <h4 class="text-base font-bold mb-4 text-gray-900">自定义 JS</h4>
 
               <div
                 v-if="!store.appConfig.customJsDisclaimerAgreed"
                 class="p-4 bg-white rounded-lg border border-gray-200 shadow-sm"
               >
-                <h5 class="font-bold text-gray-700 mb-2 flex items-center gap-2">{{ $t('settings.extraSections.jsDisclaimerTitle') }}</h5>
+                <h5 class="font-bold text-gray-700 mb-2 flex items-center gap-2">安全免责声明</h5>
                 <div class="text-sm text-gray-600 mb-3 leading-relaxed">
-                  {{ $t('settings.extraSections.jsDisclaimerDesc1') }}
+                  使用自定义 JavaScript 功能允许您向页面注入任意代码。这可能导致：
                   <ul class="list-disc list-inside ml-2 mt-1 space-y-1 text-xs">
-                    <li>{{ $t('settings.extraSections.jsDisclaimerXss') }}</li>
-                    <li>{{ $t('settings.extraSections.jsDisclaimerCrash') }}</li>
-                    <li>{{ $t('settings.extraSections.jsDisclaimerLeak') }}</li>
+                    <li>XSS (跨站脚本) 攻击风险</li>
+                    <li>页面功能异常或崩溃</li>
+                    <li>敏感数据泄露</li>
                   </ul>
                 </div>
                 <p class="text-sm text-gray-600 mb-4 font-bold">
-                  {{ $t('settings.extraSections.jsDisclaimerDesc2') }}
+                  由此产生的一切后果由您自行承担。请确保您完全信任并理解您所添加的代码。
                 </p>
                 <label class="flex items-center gap-2 cursor-pointer select-none">
                   <input
@@ -4074,7 +4157,7 @@ watch(activeTab, (val) => {
                     class="w-4 h-4 text-gray-900 rounded border-gray-300 focus:ring-blue-400 accent-blue-400"
                   />
                   <span class="text-sm font-medium text-gray-700"
-                    >{{ $t('settings.extraSections.jsDisclaimerAgree') }}</span
+                    >我已阅读并同意上述风险，确认启用此功能</span
                   >
                 </label>
               </div>
@@ -4092,7 +4175,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   @change="store.updateCustomScripts()"
                 />
                 <div class="text-xs text-gray-500 mt-2 flex justify-between items-center">
-                  <span>{{ $t('settings.extraSections.customJsTip') }}</span>
+                  <span>提示：JS 代码将在页面加载时执行。可与自定义 CSS 配合实现高级交互。</span>
                   <button
                     @click="store.appConfig.customJsDisclaimerAgreed = false"
                     class="text-xs text-gray-500 hover:text-gray-600 underline"
@@ -4106,11 +4189,11 @@ document.querySelector('.card-item').addEventListener('click', () => {
             <!-- Weather Service Settings -->
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4 mb-6">
               <div class="flex items-center justify-between mb-4">
-                <h4 class="text-base font-bold text-gray-900">{{ $t('settings.extraSections.weatherServiceSettings') }}</h4>
+                <h4 class="text-base font-bold text-gray-900">天气服务设置</h4>
               </div>
               <div class="space-y-3">
                 <div>
-                  <label class="block text-xs font-bold text-gray-600 mb-2">{{ $t('settings.extraSections.weatherSourceSelect') }}</label>
+                  <label class="block text-xs font-bold text-gray-600 mb-2">天气源选择</label>
                   <div class="flex items-center gap-4 mb-3">
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input
@@ -4119,7 +4202,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                         value="uapi"
                         class="text-gray-900 accent-blue-400"
                       />
-                      <span class="text-sm">{{ $t('settings.extraSections.openMeteo') }}</span>
+                      <span class="text-sm">OpenMeteo (免费/推荐)</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input
@@ -4128,7 +4211,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                         value="amap"
                         class="text-gray-900 accent-blue-400"
                       />
-                      <span class="text-sm">{{ $t('settings.extraSections.amapSource') }}</span>
+                      <span class="text-sm">高德地图 (AMap)</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input
@@ -4137,14 +4220,14 @@ document.querySelector('.card-item').addEventListener('click', () => {
                         value="qweather"
                         class="text-gray-900 accent-blue-400"
                       />
-                      <span class="text-sm">{{ $t('settings.extraSections.qweatherSource') }}</span>
+                      <span class="text-sm">和风天气 (QWeather)</span>
                     </label>
                   </div>
 
                   <!-- OpenMeteo Settings -->
                   <div v-if="(!store.appConfig.weatherSource || store.appConfig.weatherSource === 'uapi')" class="animate-fade-in mt-2 mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
                     <p class="text-xs text-blue-700 mb-2">
-                      {{ $t('settings.extraSections.openMeteoDesc') }}
+                      OpenMeteo 是一个免费开源的天气 API，无需申请 Key，支持全球天气数据。
                     </p>
                     <div class="flex items-center gap-2">
                       <button
@@ -4153,7 +4236,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                         :disabled="isTestingWeather"
                       >
                         <span v-if="isTestingWeather" class="animate-spin text-xs">●</span>
-                        {{ isTestingWeather ? $t('settings.extraSections.weatherTesting') : $t('settings.extraSections.weatherTestBtn') }}
+                        {{ isTestingWeather ? "测试中..." : "测试连接 (OpenMeteo)" }}
                       </button>
                       <span
                         v-if="testWeatherResult"
@@ -4167,21 +4250,28 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 </div>
 
                 <div v-if="store.appConfig.weatherSource === 'amap'" class="animate-fade-in">
-                  <label class="block text-xs font-bold text-gray-600 mb-1">{{ $t('settings.extraSections.amapApiKey') }}</label>
+                  <label class="block text-xs font-bold text-gray-600 mb-1">高德 API Key</label>
                   <input
                     v-model="store.appConfig.amapKey"
                     class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-gray-900 outline-none"
-                    :placeholder="$t('settings.extraSections.placeholderAmapKey')"
+                    placeholder="请输入高德 Web 服务 Key"
                   />
                   <div class="flex items-center justify-between mt-2">
                     <p class="text-[10px] text-gray-500">
-                      {{ $t('settings.extraSections.applyForAmapKey') }}
+                      请前往
+                      <a
+                        href="https://console.amap.com/dev/key/app"
+                        target="_blank"
+                        class="text-gray-600 underline hover:text-gray-900"
+                        >高德开放平台</a
+                      >
+                      申请 Web 服务 Key。
                     </p>
                     <button
                       @click="addAmapWeatherWidget"
                       class="px-3 py-1 text-xs font-medium bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
                     >
-                      <span>+</span> {{ $t('settings.extraSections.addWeatherComponentToDesktop') }}
+                      <span>+</span> 添加天气组件到桌面
                     </button>
                   </div>
                 </div>
@@ -4261,11 +4351,11 @@ document.querySelector('.card-item').addEventListener('click', () => {
             <!-- Webhook Settings -->
             <div class="bg-gray-50 border border-gray-100 rounded-xl p-4">
               <div class="flex items-center justify-between mb-4">
-                <h4 class="text-base font-bold text-gray-900">{{ $t('settings.extraSections.webhookSettings') }}</h4>
+                <h4 class="text-base font-bold text-gray-900">Webhook 设置 (内测中)</h4>
               </div>
 
               <div class="mb-6">
-                <h5 class="font-bold text-gray-900 mb-2">{{ $t('settings.extraSections.webhookAddress') }}</h5>
+                <h5 class="font-bold text-gray-900 mb-2">Webhook 地址</h5>
                 <div class="flex items-center gap-2 bg-white/60 p-2 rounded border border-gray-200">
                   <code class="text-xs text-gray-600 flex-1 break-all">{{ getWebhookUrl() }}</code>
                   <button
@@ -4282,7 +4372,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 <div class="mt-3 space-y-3 bg-white/60 p-3 rounded-lg border border-gray-200">
                   <div>
                     <div class="flex items-center gap-2 mb-1">
-                      <span class="text-xs font-bold text-gray-700">{{ $t('settings.extraSections.webhookHeader') }}</span>
+                      <span class="text-xs font-bold text-gray-700">请求头 (Header)</span>
                     </div>
                     <code
                       class="block text-xs text-gray-600 font-mono bg-gray-50 p-1.5 rounded border border-gray-200"
@@ -4291,7 +4381,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   </div>
                   <div>
                     <div class="flex items-center gap-2 mb-1">
-                      <span class="text-xs font-bold text-gray-700">{{ $t('settings.extraSections.webhookBody') }}</span>
+                      <span class="text-xs font-bold text-gray-700">请求体 (Body)</span>
                     </div>
                     <pre
                       class="text-xs text-gray-600 font-mono bg-gray-50 p-1.5 rounded border border-gray-200 whitespace-pre"
@@ -4307,13 +4397,13 @@ document.querySelector('.card-item').addEventListener('click', () => {
               </div>
 
               <div class="space-y-3">
-                <h5 class="font-bold text-gray-900">{{ $t('settings.extraSections.latestStatus') }}</h5>
+                <h5 class="font-bold text-gray-900">最新状态</h5>
                 <div
                   v-if="store.luckyStunData && store.luckyStunData.data"
                   class="grid grid-cols-2 gap-3"
                 >
                   <div class="bg-white/60 p-3 rounded-lg border border-gray-200">
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.extraSections.statusLabel') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">状态</div>
                     <div
                       class="font-bold"
                       :class="
@@ -4326,19 +4416,19 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     </div>
                   </div>
                   <div class="bg-white/60 p-3 rounded-lg border border-gray-200">
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.extraSections.pubIp') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">公网 IP</div>
                     <div class="font-bold text-gray-900 font-mono break-all">
                       {{ store.luckyStunData.data.ip || "-" }}
                     </div>
                   </div>
                   <div class="bg-white/60 p-3 rounded-lg border border-gray-200">
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.extraSections.port') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">端口</div>
                     <div class="font-bold text-gray-900">
                       {{ store.luckyStunData.data.port || "-" }}
                     </div>
                   </div>
                   <div class="bg-white/60 p-3 rounded-lg border border-gray-200">
-                    <div class="text-xs text-gray-500 mb-1">{{ $t('settings.extraSections.updateTime') }}</div>
+                    <div class="text-xs text-gray-500 mb-1">更新时间</div>
                     <div class="text-xs text-gray-900">
                       {{ formatTime(store.luckyStunData.ts) }}
                     </div>
@@ -4348,7 +4438,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   v-else
                   class="text-center py-8 text-gray-400 text-sm bg-white rounded-xl border border-dashed border-gray-200"
                 >
-                  {{ $t('settings.extraSections.noWebhookData') }}
+                  暂无数据，请等待 Webhook 触发...
                 </div>
               </div>
 
@@ -4357,20 +4447,20 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   @click="store.fetchLuckyStunData"
                   class="text-sm text-gray-500 hover:text-gray-900 hover:underline flex items-center gap-1 font-bold transition-colors"
                 >
-                  <span>🔄</span> {{ $t('settings.extraSections.refreshData') }}
+                  <span>🔄</span> 刷新数据
                 </button>
               </div>
             </div>
 
           </div>
 
-          <div v-if="activeTab === 'account'" class="min-h-full flex flex-col justify-center">
+          <div v-if="isTab('account')" class="min-h-full flex flex-col justify-center">
             <div v-if="!store.isLogged" class="text-center">
-              <h4 class="text-xl font-bold mb-6 text-gray-900">{{ $t('settings.extraSections.loginAsAdmin') }}</h4>
+              <h4 class="text-xl font-bold mb-6 text-gray-900">管理员登录</h4>
               <input
                 v-model="passwordInput"
                 type="password"
-                :placeholder="$t('settings.extraSections.placeholderPasswordLogin')"
+                placeholder="密码..."
                 class="w-full max-w-xs px-4 py-3 border border-gray-200 rounded-xl mb-4 mx-auto text-center focus:border-gray-900 outline-none"
                 @keyup.enter="handleLogin"
               />
@@ -4383,7 +4473,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
             </div>
             <div v-else class="max-w-sm mx-auto w-full">
               <div class="bg-gray-50 p-5 rounded-xl border border-gray-100 mb-6">
-                <h5 class="text-sm font-bold text-gray-900 mb-3">{{ $t('settings.extraSections.backupRestoreSection') }}</h5>
+                <h5 class="text-sm font-bold text-gray-900 mb-3">📦 备份与恢复</h5>
                 <div class="grid grid-cols-2 gap-3">
                   <button
                     @click="handleExport"
@@ -4423,11 +4513,11 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 v-if="hasAdminAccess"
                 class="bg-gray-50 p-5 rounded-xl border border-gray-200 mb-6"
               >
-                <h5 class="text-sm font-bold text-gray-900 mb-3">{{ $t('settings.extraSections.systemMode') }}</h5>
+                <h5 class="text-sm font-bold text-gray-900 mb-3">系统模式</h5>
                 <div class="flex items-center justify-between">
                   <span class="text-sm text-gray-700"
                     >当前模式：{{
-                      store.systemConfig.authMode === "single" ? $t('settings.extraSections.singleUserMode') : $t('settings.extraSections.multiUserMode')
+                      store.systemConfig.authMode === "single" ? "单用户模式" : "多用户模式"
                     }}</span
                   >
                   <button
@@ -4435,7 +4525,9 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     @click="toggleAuthMode"
                     class="px-4 py-2 rounded-lg text-sm font-bold text-white transition-all bg-gray-900 hover:bg-gray-800"
                   >
-                    {{ $t('settings.extraSections.switchToMode', { mode: store.systemConfig.authMode === 'single' ? $t('settings.extraSections.multiUserMode') : $t('settings.extraSections.singleUserMode') }) }}
+                    切换为{{
+                      store.systemConfig.authMode === "single" ? "多用户模式" : "单用户模式"
+                    }}
                   </button>
                   <span
                     v-else
@@ -4447,20 +4539,20 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 <p class="text-xs text-gray-500 mt-2">
                   {{
                     store.systemConfig.authMode === "single"
-                      ? $t('settings.extraSections.singleModeHint')
-                      : $t('settings.extraSections.multiModeHint')
+                      ? "单用户模式下，登录界面简化，仅需输入密码即可登录 Admin 账户。"
+                      : "多用户模式下，允许多个用户注册和登录，数据相互隔离。"
                   }}
                 </p>
                 <p class="text-xs text-gray-500 mt-1">
-                  {{ $t('settings.extraSections.defaultPasswords') }}
+                  单用户默认密码:admin 多用户模式用户名密码都默认：admin
                 </p>
               </div>
               <div class="bg-gray-50 p-5 rounded-xl border border-gray-200 mb-6">
-                <h5 class="text-sm font-bold text-gray-900 mb-3">{{ $t('settings.extraSections.configVersionsSection') }}</h5>
+                <h5 class="text-sm font-bold text-gray-900 mb-3">🕘 配置版本</h5>
                 <div class="flex gap-2 items-center mb-2">
                   <input
                     v-model="versionLabel"
-                    :placeholder="$t('settings.extraSections.placeholderVersionLabel')"
+                    placeholder="版本备注（可选）"
                     class="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:border-gray-900 outline-none"
                   />
                   <button
@@ -4473,14 +4565,14 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 <div class="text-[10px] text-gray-500 mb-2">
                   {{
                     store.systemConfig.authMode === "single"
-                      ? $t('settings.extraSections.saveLocation')
-                      : $t('settings.extraSections.saveLocationUser')
+                      ? "保存位置：data/config_versions"
+                      : "保存位置：data/config_versions (仅当前用户可见)"
                   }}
                 </div>
                 <div class="max-h-40 overflow-y-auto space-y-1">
-                  <div v-if="loadingVersions" class="text-xs text-gray-500">{{ $t('settings.extraSections.loadingVersions') }}</div>
+                  <div v-if="loadingVersions" class="text-xs text-gray-500">加载中...</div>
                   <div v-else-if="versions.length === 0" class="text-xs text-gray-400 text-center py-4">
-                    {{ $t('settings.extraSections.noVersionsSaved') }}
+                    暂无保存的版本
                   </div>
                   <div
                     v-for="v in versions"
@@ -4489,7 +4581,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   >
                     <div class="flex-1">
                       <div class="text-sm font-medium text-gray-900 truncate">
-                        {{ v.label || $t('settings.extraSections.unnamedVersion') }}
+                        {{ v.label || "未命名版本" }}
                       </div>
                       <div class="text-[10px] text-gray-500">
                         {{ new Date(v.createdAt).toLocaleString() }} ·
@@ -4514,14 +4606,14 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 </div>
               </div>
               <div class="bg-gray-50 p-5 rounded-xl border border-gray-200 mb-6">
-                <h5 class="text-sm font-medium text-gray-700 mb-1">{{ $t('settings.extraSections.changePasswordSection') }}</h5>
-                <p class="text-xs text-gray-500 mb-2">{{ $t('settings.extraSections.modifyPasswordHint') }}</p>
+                <h5 class="text-sm font-medium text-gray-700 mb-1">🔑 修改密码</h5>
+                <p class="text-xs text-gray-500 mb-2">点击修改后请输入原来密码</p>
                 <div class="flex gap-2">
                   <div class="relative flex-1">
                     <input
                       v-model="newPasswordInput"
                       :type="showPassword ? 'text' : 'password'"
-                      :placeholder="$t('settings.extraSections.placeholderNewPassword')"
+                      placeholder="新密码..."
                       class="w-full px-3 py-2 rounded-lg border border-gray-300 pr-10 focus:border-gray-900 outline-none"
                     />
                     <button
@@ -4529,7 +4621,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                       class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none"
                       type="button"
                       tabindex="-1"
-                      :title="showPassword ? $t('settings.extraSections.hidePassword') : $t('settings.extraSections.showPassword')"
+                      :title="showPassword ? '隐藏密码' : '显示密码'"
                     >
                       <svg
                         v-if="showPassword"
@@ -4615,7 +4707,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   >
                     <span class="text-sm text-gray-700 font-medium">
                       {{ u }}
-                      <span v-if="u === 'admin'" class="text-xs text-gray-500">{{ $t('settings.extraSections.admin') }}</span>
+                      <span v-if="u === 'admin'" class="text-xs text-gray-500">(管理员)</span>
                     </span>
                     <button
                       v-if="u !== 'admin'"
@@ -4633,7 +4725,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                   <div class="flex gap-2">
                     <input
                       v-model="licenseKey"
-                      :placeholder="$t('settings.extraSections.placeholderLicenseKey')"
+                      placeholder="输入密钥解除限制..."
                       class="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:border-gray-900 outline-none"
                     />
                     <button
@@ -4657,16 +4749,16 @@ document.querySelector('.card-item').addEventListener('click', () => {
               </button>
             </div>
           </div>
-          <div v-if="activeTab === 'about'" class="min-h-full flex flex-col p-8 -mt-4">
+          <div v-if="isTab('about')" class="min-h-full flex flex-col p-8 -mt-4">
             <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
-              <h5 class="text-sm font-bold text-gray-900 mb-2">{{ $t('settings.about.thanks') }}</h5>
+              <h5 class="text-sm font-bold text-gray-900 mb-2">感谢</h5>
               <div class="text-xs text-gray-600 leading-relaxed">
                 <div class="text-sm">
-                  <span class="font-medium text-gray-800">{{ $t('settings.about.feeders') }}：</span>
+                  <span class="font-medium text-gray-800">投喂人：</span>
                   <span class="font-bold text-base text-gray-900">你应爱</span>；小浣熊；*俊；*牛社区主理人；*a；*甜蜜主理人；*坤；T*t;*O；*陈等
                 </div>
                 <div class="mt-2">
-                  <span class="font-medium text-gray-800">{{ $t('settings.about.specialThanks') }}：</span>
+                  <span class="font-medium text-gray-800">特别鸣谢意见反馈：</span>
                   Excel;徐大大;时也,命也;大星;友人A;汪仔饭;Assassin;多度;Wheezer;苍蝇炖粉条等
                 </div>
               </div>
@@ -4678,24 +4770,24 @@ document.querySelector('.card-item').addEventListener('click', () => {
                 class="text-lg font-bold text-gray-700"
                 style="writing-mode: vertical-rl; text-orientation: mixed"
               >
-                {{ $t('settings.about.feedAuthor') }}
+                ☕ 投喂作者
               </div>
               <div class="flex flex-row flex-wrap items-start justify-center gap-6">
                 <div class="flex flex-col items-center gap-2">
                   <img
                     src="/public/alipay.jpg"
                     class="w-36 h-36 rounded-lg shadow-sm border border-gray-100 object-contain transition-all"
-                    alt="Alipay"
+                    alt="支付宝"
                   />
-                  <span class="text-sm text-gray-500">{{ $t('settings.about.alipay') }}</span>
+                  <span class="text-sm text-gray-500">支付宝</span>
                 </div>
                 <div class="flex flex-col items-center gap-2">
                   <img
                     src="/public/wechat.jpg"
                     class="w-36 h-36 rounded-lg shadow-sm border border-gray-100 object-contain transition-all"
-                    alt="WeChat"
+                    alt="微信"
                   />
-                  <span class="text-sm text-gray-500">{{ $t('settings.about.wechat') }}</span>
+                  <span class="text-sm text-gray-500">微信</span>
                 </div>
               </div>
             </div>
@@ -4704,7 +4796,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
               <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
                 <div class="flex items-center justify-between gap-4">
                   <div class="flex items-baseline gap-2">
-                    <span class="text-xs text-gray-500">{{ $t('settings.about.qqGroup') }}</span>
+                    <span class="text-xs text-gray-500">QQ群</span>
                     <span class="text-lg text-gray-700 font-mono">613835409</span>
                   </div>
                   <div class="flex items-center gap-2">
@@ -4714,7 +4806,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
 
                 <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
                   <div class="text-xs text-gray-500">
-                    {{ $t('settings.about.officialSite') }}：
+                    官网与介绍：
                     <a
                       href="https://flatnas.top/"
                       target="_blank"
@@ -4724,7 +4816,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     </a>
                   </div>
                   <div class="text-xs text-gray-500">
-                    {{ $t('settings.about.wiki') }}：
+                    飞牛百科：
                     <a
                       href="http://qdnas.icu/"
                       target="_blank"
@@ -4734,7 +4826,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     </a>
                   </div>
                   <div class="text-xs text-gray-500">
-                    {{ $t('settings.about.iconLibrary') }}：
+                    图标库主站：
                     <a
                       href="https://nasicon.top/"
                       target="_blank"
@@ -4744,7 +4836,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     </a>
                   </div>
                   <div class="text-xs text-gray-500">
-                    {{ $t('settings.about.iconLibrary2') }}：
+                    图标库二站：
                     <a
                       href="https://2.nasicon.top/"
                       target="_blank"
@@ -4754,7 +4846,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
                     </a>
                   </div>
                   <div class="text-xs text-gray-500">
-                    {{ $t('settings.about.iconLibrary3') }}：
+                    图标库三站：
                     <a
                       href="https://4.nasicon.top/"
                       target="_blank"
@@ -4823,46 +4915,6 @@ document.querySelector('.card-item').addEventListener('click', () => {
               </div>
             </div>
           </div>
-
-          <div v-if="activeTab === 'language'" class="space-y-4">
-            <div class="bg-white/60 border border-gray-100 rounded-xl p-4">
-              <h4 class="text-base font-bold mb-4 text-gray-900">{{ $t('settings.language.title') }}</h4>
-              <div class="space-y-3">
-                <div
-                  v-for="locale in i18nStore.availableLocales"
-                  :key="locale"
-                  @click="i18nStore.setLocale(locale, true)"
-                  :class="[
-                    'flex items-center justify-between p-3 rounded-lg cursor-pointer transition-all border',
-                    i18nStore.currentLocale === locale
-                      ? 'bg-gray-900 text-white border-gray-900'
-                      : 'bg-white border-gray-200 hover:border-gray-400'
-                  ]"
-                >
-                  <div class="flex items-center gap-3">
-                    <span class="text-lg">{{ LOCALE_FLAGS[locale] }}</span>
-                    <span class="font-medium">{{ LOCALE_LABELS[locale] }}</span>
-                  </div>
-                  <svg
-                    v-if="i18nStore.currentLocale === locale"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    class="w-5 h-5"
-                  >
-                    <path
-                      fill-rule="evenodd"
-                      d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
-                      clip-rule="evenodd"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <p class="mt-4 text-xs text-gray-500">
-                 {{ $t('settings.language.tip') }}
-               </p>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -4885,7 +4937,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
         <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-2xl">
           !
         </div>
-        <h3 class="text-base font-bold text-gray-900">{{ $t('settings.extraSections.switchModeWarning') }}</h3>
+        <h3 class="text-base font-bold text-gray-900">切换模式警告</h3>
       </div>
 
       <p class="text-sm text-gray-600 mb-6 leading-relaxed">
@@ -4903,7 +4955,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
         <button
           @click="
             showMultiUserWarning = false;
-            requestAuth(() => performAuthModeSwitch('multi'), t('settings.messages.confirmSwitchAuth'));
+            requestAuth(() => performAuthModeSwitch('multi'), '请输入管理员密码以确认切换');
           "
           class="flex-1 px-4 py-2.5 min-h-[44px] bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors shadow-md"
         >
@@ -4921,8 +4973,8 @@ document.querySelector('.card-item').addEventListener('click', () => {
     panel-class="max-w-sm"
   >
     <div class="bg-white rounded-xl shadow-xl p-6 w-full border border-gray-100">
-      <h3 class="text-base font-bold text-gray-900 mb-2">{{ $t('settings.extraSections.confirmDeleteTitle') }}</h3>
-      <p class="text-sm text-gray-500 mb-6">{{ $t('settings.extraSections.confirmDeleteWindowDesc') }}</p>
+      <h3 class="text-base font-bold text-gray-900 mb-2">确认删除</h3>
+      <p class="text-sm text-gray-500 mb-6">确定要删除这个万能窗口吗？此操作无法撤销。</p>
       <div class="flex gap-3">
         <button
           @click="showDeleteWidgetConfirm = false"
@@ -4976,6 +5028,7 @@ document.querySelector('.card-item').addEventListener('click', () => {
     </div>
   </OverlayMotion>
 
+  <MarketplaceModal :show="showMarketplace" @update:show="showMarketplace = $event" />
 </template>
 
 <style scoped>
@@ -5045,6 +5098,55 @@ document.querySelector('.card-item').addEventListener('click', () => {
   border: 2px solid rgba(255, 255, 255, 0.95);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
   font-weight: 700;
+}
+
+/* 参考图风格：侧栏菜单项 = 白色圆角小卡片，选中 = 浅绿底 + 绿字 + 绿描边 */
+.settings-nav-idle {
+  background: #ffffff;
+  border: 1px solid #f3f4f6;
+  color: #4b5563;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.settings-nav-idle:hover {
+  background: #f0fdf4;
+  color: #15803d;
+}
+.settings-nav-selected {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+/* "关于"项未选中时保留红色警示调 */
+.settings-nav-idle-danger {
+  color: #ef4444;
+}
+.settings-nav-idle-danger:hover {
+  background: #fef2f2;
+  color: #dc2626;
+}
+/* 夜间模式适配 */
+.night-settings .settings-nav-idle {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+}
+.night-settings .settings-nav-idle:hover {
+  background: rgba(15, 23, 42, 0.75);
+  color: #86efac;
+}
+.night-settings .settings-nav-selected {
+  background: rgba(21, 128, 61, 0.35);
+  border-color: rgba(134, 239, 172, 0.5);
+  color: #86efac;
+}
+.night-settings .settings-nav-idle-danger {
+  color: #fca5a5;
+}
+.night-settings .settings-nav-idle-danger:hover {
+  background: rgba(127, 29, 29, 0.4);
+  color: #fecaca;
 }
 .selectable-outline:focus-visible,
 .selectable-outline:active {

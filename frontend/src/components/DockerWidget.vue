@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+import { ref, onMounted, onUnmounted, computed, watch, defineAsyncComponent } from "vue";
 import { useMainStore } from "@/stores/main";
-import type { WidgetConfig } from "@/types";
+import type { NavGroup, NavItem, WidgetConfig } from "@/types";
 import { useResumeRefresh } from "@/composables/useResumeRefresh";
+
+// 复用与桌面添加卡片相同的"添加新项目"弹窗（按需加载）
+const EditModal = defineAsyncComponent(() => import("./EditModal.vue"));
 
 type DockerApiState = "disabled" | "unavailable" | "ready";
 
@@ -877,86 +880,94 @@ const openContainerPublicUrl = (c: DockerContainer) => {
   if (url) window.open(url, "_blank");
 };
 
-const addToHome = (c: DockerContainer) => {
-  // 1. Find or create "Docker" group
-  let dockerGroup = store.groups.find((g) => g.title === "Docker");
-  if (!dockerGroup) {
-    const newGroupId = Date.now().toString();
-    store.groups.push({
-      id: newGroupId,
-      title: "Docker",
-      items: [],
-      // Default settings for Docker group
-      cardLayout: "horizontal",
-      gridGap: 8,
-      cardSize: 120,
-      iconSize: 48,
-      showCardBackground: true,
-    });
-    dockerGroup = store.groups.find((g) => g.title === "Docker");
+// ==================== 通过"添加新项目"弹窗添加容器卡片 ====================
+const showAddModal = ref(false);
+const addModalData = ref<NavItem | null>(null);
+const addModalGroupId = ref("");
+
+// 只查找已有的 Docker 分组，**不再自动创建**。
+// 从 Docker 管理里加卡片是"往已有结构里放东西"，凭空多出一个分组会让桌面结构失控；
+// 要新建分组应当由用户在编辑模式下显式操作。
+const findDockerGroup = (): NavGroup | undefined =>
+  store.groups.find((g) => g.title.trim().toLowerCase() === "docker");
+
+const addToHome = async (c: DockerContainer) => {
+  const title = normalizeContainerName(c.Names?.[0] || "Container");
+
+  // 没有分组就无处分发，直接提示（原逻辑在这里会悄悄建一个 "Docker" 分组）
+  if (store.groups.length === 0) {
+    showToast("还没有任何分组，请先创建一个分组");
+    return;
   }
 
-  if (!dockerGroup) return; // Should not happen
+  // 默认选中已有的 Docker 分组；没有就退回第一个分组（仍不创建），弹窗内可切换
+  const dockerGroup = findDockerGroup();
+  addModalGroupId.value = dockerGroup?.id || store.groups[0]?.id || "";
 
-  const addImpl = async () => {
-    let lanUrl = getContainerLanUrl(c);
-    let publicUrl = getContainerPublicUrl(c);
+  // 预先解析内外网地址，方便在弹窗中直接确认或补充
+  let lanUrl = getContainerLanUrl(c);
+  let publicUrl = getContainerPublicUrl(c);
+  if (!lanUrl && !publicUrl) {
+    await fetchInspectLite(c.Id);
+    lanUrl = getContainerLanUrl(c);
+    publicUrl = getContainerPublicUrl(c);
+  }
 
-    if (!lanUrl && !publicUrl) {
-      await fetchInspectLite(c.Id);
-      lanUrl = getContainerLanUrl(c);
-      publicUrl = getContainerPublicUrl(c);
-    }
+  addModalData.value = {
+    id: "", // 空 id 表示新增模式
+    title,
+    url: publicUrl || "",
+    lanUrl: lanUrl || "",
+    icon: "",
+    isPublic: false,
+    openInNewTab: true,
+    // 关键：带上容器标识，卡片才能持续显示 CPU / 内存等容器状态
+    containerId: c.Id,
+    containerName: title,
+    allowRestart: true,
+    allowStop: true,
+    description1: "Docker Container",
+  } as NavItem;
 
-    if (!lanUrl && !publicUrl) {
-      const port = prompt("未检测到端口映射/暴露端口，请手动输入端口号 (例如 8080):")?.trim();
-      if (!port) return;
-      const portNum = parseInt(port, 10);
-      if (!Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) return;
-      const lanHost =
-        (props.widget?.data && typeof props.widget.data.lanHost === "string"
-          ? props.widget.data.lanHost.trim()
-          : "") || "";
-      const host = lanHost || window.location.hostname;
-      lanUrl = `http://${host}:${portNum}`;
-      publicUrl = `http://${window.location.hostname}:${portNum}`;
-    }
+  showAddModal.value = true;
+};
 
-    const title = normalizeContainerName(c.Names?.[0] || "Container");
+const handleAddSave = async (payload: { item: NavItem; groupId?: string }) => {
+  const targetGroupId = payload.groupId || addModalGroupId.value;
+  const group = store.groups.find((g) => g.id === targetGroupId);
+  if (!group) {
+    // 这里必须 throw，不能 return：
+    // EditModal 只在 onSave 正常返回后才 close()，throw 会走它的 catch（弹窗保持打开、内容不丢）；
+    // return 会被当成保存成功，把用户刚填的东西一起关掉。
+    throw new Error("未找到可用分组，请先创建一个分组再添加");
+  }
 
-    const exists = dockerGroup.items.some((item) => {
-      if (item.containerId && item.containerId === c.Id) return true;
-      const n = normalizeContainerName(item.containerName || "");
-      if (n && n === title) return true;
-      return false;
-    });
-    if (exists) {
-      showToast(`容器 "${title}" 已存在`);
-      return;
-    }
+  const title = normalizeContainerName(payload.item.title || payload.item.containerName || "Container");
 
-    const newItem = {
-      id: Date.now().toString(),
-      title: title,
-      url: publicUrl,
-      lanUrl: lanUrl,
-      icon: "", // We can try to fetch icon later or let user set it
-      isPublic: false,
-      openInNewTab: true,
-      containerId: c.Id,
-      containerName: title,
-      allowRestart: true,
-      allowStop: true,
-      description: "Docker Container", // Optional description
-    };
+  // 与旧逻辑一致：同一分组内按容器 ID 或名称去重
+  const exists = group.items.some((item) => {
+    if (payload.item.containerId && item.containerId === payload.item.containerId) return true;
+    const n = normalizeContainerName(item.containerName || "");
+    return !!(n && n === title);
+  });
+  if (exists) {
+    throw new Error(`容器 "${title}" 已存在于分组 "${group.title}"`);
+  }
 
-    store.addItem(newItem, dockerGroup.id);
-    store.markDirty();
-    void store.saveData(true);
-    showToast(`已添加 "${title}"`);
+  const newItem: NavItem = {
+    ...payload.item,
+    id: Date.now().toString(),
+    title,
+    containerId: payload.item.containerId,
+    containerName: title,
+    allowRestart: payload.item.allowRestart ?? true,
+    allowStop: payload.item.allowStop ?? true,
   };
 
-  void addImpl();
+  store.addItem(newItem, group.id);
+  store.markDirty();
+  void store.saveData(true);
+  showToast(`已添加 "${title}"`);
 };
 
 const editingPublicId = ref<string | null>(null);
@@ -997,10 +1008,12 @@ const getStatusColor = (state: string) => {
 <template>
   <div
     :class="[
-      'w-full h-full flex flex-col overflow-hidden',
+      // relative 是无副作用地兜底：compact 分支原来没有定位祖先，
+      // 下面那个 absolute 轻提示会跑到别处去。
+      'w-full h-full flex flex-col overflow-hidden relative',
       props.compact
         ? ''
-        : 'bg-white/80 dark:bg-gray-800/80 backdrop-blur-md rounded-2xl p-4 relative',
+        : 'bg-white/80 dark:bg-gray-800/80 backdrop-blur-md rounded-2xl p-4',
     ]"
   >
     <div v-if="!props.compact" class="flex items-center justify-between mb-1 shrink-0">
@@ -1103,6 +1116,139 @@ const getStatusColor = (state: string) => {
       >
         {{ errorDisplay }}
       </div>
+
+      <!-- 紧凑模式（设置页 Docker 管理）：参考表格风格
+           列：容器名称+镜像 | 状态徽章 | CPU/RAM 概览 | 操作（启停开关 / 重启 / +卡片 / 禁止升级）
+           首页卡片（非 compact）仍走下面的原卡片列表，窄屏放不下表格。 -->
+      <div v-if="props.compact" class="flex-1 flex flex-col overflow-hidden min-h-0 pt-1">
+        <div
+          class="grid items-center gap-3 px-3 py-2 rounded-t-xl bg-gray-100/80 text-xs font-bold text-gray-600"
+          style="grid-template-columns: minmax(0, 2.2fr) 88px minmax(0, 1.3fr) minmax(0, 250px)"
+        >
+          <span>容器名称</span>
+          <span>状态</span>
+          <span>资源概览</span>
+          <span class="text-right">操作</span>
+        </div>
+        <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0">
+          <div
+            v-for="c in containers"
+            :key="c.Id"
+            class="grid items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/60 transition-colors"
+            style="grid-template-columns: minmax(0, 2.2fr) 88px minmax(0, 1.3fr) minmax(0, 250px)"
+          >
+            <!-- 容器名称 + 镜像 + 内网地址 -->
+            <div class="min-w-0">
+              <div class="flex items-center min-w-0">
+                <span class="text-sm font-medium text-gray-900 truncate" :title="c.Names?.[0] || ''">
+                  {{ (c.Names?.[0] || "").replace(/^\//, "") }}
+                </span>
+                <span
+                  v-if="c.hasUpdate"
+                  class="text-[8px] bg-red-50 text-red-600 px-1 py-0.5 rounded border border-red-200 shrink-0 font-medium ml-1"
+                >
+                  可升级
+                </span>
+              </div>
+              <div class="text-xs text-gray-400 truncate" :title="c.Image">{{ c.Image }}</div>
+              <div
+                v-if="c.State === 'running' && getContainerLanUrl(c)"
+                @click="openContainerUrl(c)"
+                class="text-[11px] text-blue-600 hover:text-blue-700 cursor-pointer truncate font-mono"
+                title="打开内网地址"
+              >
+                {{ getContainerLanUrl(c).replace(/^https?:\/\//, "") }}
+              </div>
+            </div>
+
+            <!-- 状态徽章 -->
+            <div>
+              <span
+                v-if="c.State === 'running'"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-green-50 text-green-600 text-xs"
+              >
+                <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>运行中
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 text-xs"
+              >
+                <span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>已停止
+              </span>
+            </div>
+
+            <!-- 资源概览：CPU / RAM 两行纯文字（参考图无进度条） -->
+            <div class="text-xs font-mono text-gray-700 leading-5">
+              <div>
+                CPU:
+                <span v-if="c.stats">{{ c.stats.cpuPercent.toFixed(1) }}%</span>
+                <span v-else class="text-gray-300">--</span>
+              </div>
+              <div>
+                RAM:
+                <span v-if="c.stats">{{ (c.stats.memUsage / 1024 / 1024).toFixed(1) }}MB</span>
+                <span v-else class="text-gray-300">--</span>
+              </div>
+            </div>
+
+            <!-- 操作：启停开关 / 重启 / +卡片 / 禁止升级 -->
+            <div class="flex items-center justify-end gap-2">
+              <label
+                class="relative inline-flex items-center cursor-pointer shrink-0"
+                :title="c.State === 'running' ? '点击停止容器' : '点击启动容器'"
+              >
+                <input
+                  type="checkbox"
+                  :checked="c.State === 'running'"
+                  @change="() => handleAction(c.Id, c.State === 'running' ? 'stop' : 'start')"
+                  class="sr-only peer"
+                />
+                <div
+                  class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 peer-focus:outline-none after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"
+                ></div>
+              </label>
+              <button
+                @click="handleAction(c.Id, 'restart')"
+                title="重启"
+                class="w-8 h-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-blue-600 hover:border-blue-200 flex items-center justify-center transition-colors shrink-0"
+              >
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                  />
+                </svg>
+              </button>
+              <button
+                v-if="c.State === 'running'"
+                @click="addToHome(c)"
+                title="添加到桌面"
+                class="text-xs text-green-600 border border-green-200 hover:bg-green-50 px-2 py-1 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              >
+                + 卡片
+              </button>
+              <label
+                class="flex items-center gap-1 cursor-pointer shrink-0"
+                title="勾选后将跳过此容器的自动升级"
+              >
+                <input
+                  type="checkbox"
+                  class="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
+                  :checked="isAutoUpdateDisabled(c.Id)"
+                  @change="
+                    (e) => toggleAutoUpdateDisabled(c.Id, (e.target as HTMLInputElement).checked)
+                  "
+                />
+                <span class="text-xs text-gray-600 whitespace-nowrap select-none">禁止升级</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 首页卡片模式：原卡片列表 -->
+      <div v-else class="flex flex-col h-full overflow-hidden relative">
       <!-- 容器列表 (滚动区域) -->
       <div class="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar min-h-0 pt-1">
         <div
@@ -1266,7 +1412,39 @@ const getStatusColor = (state: string) => {
           </div>
         </div>
       </div>
+      </div>
     </div>
+  </div>
+
+  <!-- 添加容器卡片弹窗：与桌面"添加新项目"一致，可选择分组 -->
+  <EditModal
+    v-if="showAddModal"
+    v-model:show="showAddModal"
+    :data="addModalData"
+    :group-id="addModalGroupId"
+    :on-save="handleAddSave"
+    :z-index="90"
+    mode="add"
+  />
+
+  <!-- 轻提示。本组件里所有 showToast() 都靠它显示 ——
+       原来只有写入 toastMessage、模板里没有对应的渲染节点，提示全都不可见（顺带修掉）。
+       用 absolute 而不是 fixed：根元素带 backdrop-blur，fixed 的包含块会被它抢走，
+       反而会被根元素的 overflow-hidden 裁掉。z-50 保证盖在本组件内容之上、但不压过 EditModal（z-90）。 -->
+  <div class="absolute left-0 right-0 top-3 z-50 flex justify-center pointer-events-none px-4">
+    <Transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="toastMessage"
+        class="bg-gray-800/95 text-white text-xs px-3.5 py-2 rounded-lg shadow-xl max-w-full text-center"
+      >
+        {{ toastMessage }}
+      </div>
+    </Transition>
   </div>
 </template>
 

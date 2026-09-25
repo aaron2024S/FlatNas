@@ -1,28 +1,30 @@
 # Stage 1: Build Frontend
 FROM node:20.19-bookworm-slim AS frontend-builder
 
-# 1. 接收构建参数（代理地址 + 镜像源）
+# 1. 接收构建参数（代理地址）
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
-ARG NPM_REGISTRY
 
 # 2. 设置环境变量
 ENV HTTP_PROXY=$HTTP_PROXY \
     HTTPS_PROXY=$HTTPS_PROXY \
-    NPM_CONFIG_REGISTRY=${NPM_REGISTRY:-https://registry.npmjs.org}
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /app
 
-# Copy server/public for Vite publicDir (contains static assets like icons)
-COPY server/public ./server/public
-
+# 说明：上游这里原本有一行 `COPY server/public ./server/public`，
+# 是为了让 Vite 拿 server/public 当 publicDir。但 frontend/vite.config.ts 里
+# publicDir 已经固定写成 frontend/public（见该文件「始终从 frontend/public
+# 复制静态素材」那段注释），server/public 在本地只是构建**输出**目录、
+# 不进仓库，所以这一行已经多余；留着反而会让「仓库里没有 server/public」
+# 的干净克隆直接构建失败。故删除。
 WORKDIR /app/frontend
 
 # Copy package files first to cache dependencies
 COPY frontend/package.json frontend/package-lock.json ./
 
 # Install dependencies
-RUN npm ci --prefer-offline --no-audit --timeout=300000
+RUN npm ci
 
 # Copy source code
 COPY frontend/ .
@@ -38,7 +40,8 @@ FROM --platform=$BUILDPLATFORM golang:alpine AS backend-builder
 # 接收构建参数
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
-ARG GOPROXY=https://proxy.golang.org,direct
+# Go Proxy 设置，默认使用 goproxy.cn
+ARG GOPROXY=https://goproxy.cn,direct
 
 ENV HTTP_PROXY=$HTTP_PROXY \
     HTTPS_PROXY=$HTTPS_PROXY \

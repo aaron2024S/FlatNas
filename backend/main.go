@@ -98,7 +98,6 @@ func trimBasePath(basePath, reqPath string) string {
 	return reqPath
 }
 
-
 func main() {
 	fmt.Println("Backend process started")
 	gin.SetMode(gin.ReleaseMode)
@@ -188,29 +187,11 @@ func main() {
 	})
 	server.OnConnect("/", func(s socketio.Conn) error {
 		s.SetContext("")
-		u := s.URL()
-		token := strings.TrimSpace(u.Query().Get("token"))
-		if token == "" {
-			token = strings.TrimSpace(s.RemoteHeader().Get("Authorization"))
-		}
-		if token != "" {
-			handlers.AuthorizeSocketConn(s, token)
-		}
 		return nil
 	})
 	server.OnDisconnect("/", func(s socketio.Conn, reason string) {
 	})
 	server.OnEvent("/", "join", func(s socketio.Conn, room string) {
-		room = strings.TrimSpace(room)
-		if room == "" {
-			return
-		}
-		if strings.HasPrefix(room, "user:") {
-			username, _ := s.Context().(string)
-			if handlers.SocketUserRoom(username) != room {
-				return
-			}
-		}
 		s.Join(room)
 	})
 	handlers.BindHotHandlers(server)
@@ -286,17 +267,6 @@ func main() {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		// 安全加固：对源码/调试类资源（.map / .ts / .tsx / .vue / .scss 等）
-		// 不再走 SPA fallback，避免自动化扫描器误报“源码泄露”。
-		// 这些扩展名不属于 SPA 路由的合法 URL，理应直接返回 404。
-		lowerReq := strings.ToLower(reqPath)
-		debugSuffixes := []string{".map", ".ts", ".tsx", ".vue", ".scss", ".sass", ".less"}
-		for _, suf := range debugSuffixes {
-			if strings.HasSuffix(lowerReq, suf) {
-				c.Status(http.StatusNotFound)
-				return
-			}
-		}
 		if !strings.HasPrefix(reqPath, "/api") && !strings.HasPrefix(reqPath, "/socket.io") && !strings.HasPrefix(reqPath, "/ws") {
 			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 			c.File(filepath.Join(config.PublicDir, "index.html"))
@@ -309,7 +279,6 @@ func main() {
 	api := r.Group(apiPath)
 	{
 		api.POST("/login", handlers.Login)
-		api.POST("/register", handlers.Register)
 		api.GET("/data", middleware.OptionalAuthMiddleware(), handlers.GetData)
 		api.GET("/version", middleware.OptionalAuthMiddleware(), handlers.GetVersion)
 		api.GET("/system-config", handlers.GetSystemConfig)
@@ -334,9 +303,9 @@ func main() {
 		api.GET("/amap/weather", handlers.GetAmapWeather)
 		api.GET("/amap/ip", handlers.ProxyAmapIP)
 
-		api.GET("/ping", middleware.OptionalAuthMiddleware(), middleware.PingRateLimit(), handlers.Ping) // Hardened: input validation + rate limit
-		api.GET("/rtt", handlers.RTT)                                                                    // Added RTT for frontend latency check
-		api.POST("/visitor/track", handlers.TrackVisitor)                                                // Public endpoint
+		api.GET("/ping", handlers.Ping)                   // Added Ping
+		api.GET("/rtt", handlers.RTT)                     // Added RTT for frontend latency check
+		api.POST("/visitor/track", handlers.TrackVisitor) // Public endpoint
 		api.GET("/transfer/file/:filename", middleware.OptionalAuthMiddleware(), handlers.ServeFile)
 		api.GET("/transfer/thumb/:filename/:size", middleware.OptionalAuthMiddleware(), handlers.ServeThumb)
 		api.GET("/music-list", handlers.GetMusicList) // Added Music List
@@ -356,7 +325,6 @@ func main() {
 			authorized.POST("/save", handlers.SaveData) // Added SaveData
 			authorized.PUT("/memo/:id", handlers.SaveMemo)
 			authorized.PUT("/widgets/:id", handlers.SaveSingleWidget)      // Phase 3: Fine-grained widget save
-			authorized.POST("/widgets/batch", handlers.GetWidgetsBatch)    // Delta Push: batch widget query
 			authorized.POST("/system-config", handlers.UpdateSystemConfig) // Added SystemConfig Update
 			authorized.POST("/data/import", handlers.ImportData)           // Added ImportData
 			authorized.POST("/default/save", handlers.SaveDefault)
@@ -384,7 +352,7 @@ func main() {
 			authorized.DELETE("/music", handlers.DeleteMusic)      // Added Music Delete
 
 			// Transfer
-			authorized.GET("/transfer/items", handlers.GetTransferItems)
+			api.GET("/transfer/items", handlers.GetTransferItems)
 			authorized.POST("/transfer/text", handlers.SendText)
 			authorized.POST("/transfer/upload/init", handlers.UploadInit)
 			authorized.POST("/transfer/upload/chunk", handlers.UploadChunk)

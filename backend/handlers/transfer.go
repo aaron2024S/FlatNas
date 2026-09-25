@@ -199,11 +199,6 @@ func removeTransferThumbs(filename string) {
 
 func GetTransferItems(c *gin.Context) {
 	ensureDir(getUploadsDir())
-	username := c.GetString("username")
-	if username == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
 
 	itemType := c.Query("type")
 	limitStr := c.Query("limit")
@@ -227,9 +222,6 @@ func GetTransferItems(c *gin.Context) {
 
 	filtered := []models.TransferItem{}
 	for _, item := range data.Items {
-		if username != "admin" && item.Sender != username {
-			continue
-		}
 		switch itemType {
 		case "photo":
 			if item.Type == "file" && item.File != nil && strings.HasPrefix(item.File.Type, "image/") {

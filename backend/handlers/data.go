@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"flatnasgo-backend/config"
 	"flatnasgo-backend/models"
 	"flatnasgo-backend/utils"
@@ -583,56 +582,6 @@ func GetWidget(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"error": "Widget not found"})
 }
 
-// GetWidgetsBatch 批量查询 widget（POST /api/widgets/batch）
-func GetWidgetsBatch(c *gin.Context) {
-	username := c.GetString("username")
-	if username == "" {
-		username = "admin"
-	}
-
-	sysConfig := getCachedSystemConfig()
-	userFile := filepath.Join(config.UsersDir, username+".json")
-	if username == "admin" && sysConfig.AuthMode == "single" {
-		userFile = filepath.Join(config.DataDir, "data.json")
-	}
-
-	var userData map[string]interface{}
-	if err := utils.ReadJSON(userFile, &userData); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User data not found"})
-		return
-	}
-
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ids required"})
-		return
-	}
-
-	widgets, ok := userData["widgets"].([]interface{})
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{"success": true, "widgets": []interface{}{}})
-		return
-	}
-
-	idSet := make(map[string]bool, len(req.IDs))
-	for _, id := range req.IDs {
-		idSet[id] = true
-	}
-
-	result := make([]interface{}, 0)
-	for _, w := range widgets {
-		if wm, ok := w.(map[string]interface{}); ok {
-			if wId, ok := wm["id"].(string); ok && idSet[wId] {
-				result = append(result, w)
-			}
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "widgets": result})
-}
-
 func sanitizeMemoID(raw string) string {
 	var b strings.Builder
 	for _, r := range raw {
@@ -873,68 +822,18 @@ func SaveMemo(c *gin.Context) {
 	}
 
 	if socketServer != nil {
-		socketServer.BroadcastToRoom("/", SocketUserRoom(username), "memo:updated", map[string]interface{}{
+		socketServer.BroadcastToNamespace("/", "memo:updated", map[string]interface{}{
 			"widgetId": widgetID,
 			"content":  next,
-			"username": username,
 		})
 	}
 	if b := ws.GetBroadcaster(); b != nil {
-		ws.BroadcastMemoUpdated(b.Manager, username, widgetID, next)
+		ws.BroadcastMemoUpdated(b.Manager, widgetID, next)
 	}
 
 	body := gin.H{"success": true, "data": next}
 	memoSaveIdempotencySet(idempotencyKey, http.StatusOK, body)
 	c.JSON(http.StatusOK, body)
-}
-
-// computeWidgetDiff 比对新旧 widgets，返回变化的 ID、删除的 ID 和结构是否变化
-func computeWidgetDiff(oldData, newData map[string]interface{}) (changed []string, deleted []string, structureChanged bool) {
-	extractWidgets := func(data map[string]interface{}) map[string]interface{} {
-		result := make(map[string]interface{})
-		if ws, ok := data["widgets"].([]interface{}); ok {
-			for _, w := range ws {
-				if wm, ok := w.(map[string]interface{}); ok {
-					if id, ok := wm["id"].(string); ok {
-						result[id] = w
-					}
-				}
-			}
-		}
-		return result
-	}
-
-	oldWidgets := extractWidgets(oldData)
-	newWidgets := extractWidgets(newData)
-
-	// 找出变化和新增的 widget
-	for id, nw := range newWidgets {
-		ow, exists := oldWidgets[id]
-		if !exists {
-			changed = append(changed, id)
-			continue
-		}
-		oldJSON, _ := json.Marshal(ow)
-		newJSON, _ := json.Marshal(nw)
-		if string(oldJSON) != string(newJSON) {
-			changed = append(changed, id)
-		}
-	}
-
-	// 找出删除的 widget
-	for id := range oldWidgets {
-		if _, exists := newWidgets[id]; !exists {
-			deleted = append(deleted, id)
-		}
-	}
-
-	// 结构变化：groups 变化 或 widget ID 集合变化（有新增或删除）
-	oldGroupsJSON, _ := json.Marshal(oldData["groups"])
-	newGroupsJSON, _ := json.Marshal(newData["groups"])
-	structureChanged = string(oldGroupsJSON) != string(newGroupsJSON) || len(deleted) > 0 ||
-		len(newWidgets) != len(oldWidgets)
-
-	return changed, deleted, structureChanged
 }
 
 func SaveData(c *gin.Context) {
@@ -1044,14 +943,13 @@ func SaveData(c *gin.Context) {
 	}
 
 	if socketServer != nil {
-		socketServer.BroadcastToRoom("/", SocketUserRoom(username), "data-updated", map[string]interface{}{
+		socketServer.BroadcastToNamespace("/", "data-updated", map[string]interface{}{
 			"username": username,
 			"version":  newVersion,
 		})
 	}
 	if b := ws.GetBroadcaster(); b != nil {
-		changedWidgets, deletedWidgets, structureChanged := computeWidgetDiff(existingData, payload)
-		ws.BroadcastDataUpdated(b.Manager, username, newVersion, changedWidgets, deletedWidgets, structureChanged)
+		ws.BroadcastDataUpdated(b.Manager, username, newVersion)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "version": newVersion})
@@ -1173,7 +1071,6 @@ func UpdateSystemConfig(c *gin.Context) {
 	}
 
 	sysConfig := getCachedSystemConfig()
-	oldAuthMode := sysConfig.AuthMode
 
 	if v, ok := payload["authMode"].(string); ok {
 		if v != "single" && v != "multi" {
@@ -1190,12 +1087,6 @@ func UpdateSystemConfig(c *gin.Context) {
 		sysConfig.DockerHost = v
 	}
 
-	if sysConfig.AuthMode != oldAuthMode {
-		if err := migrateAuthModeData(oldAuthMode, sysConfig.AuthMode); err != nil {
-			log.Printf("UpdateSystemConfig: data migration failed: %v", err)
-		}
-	}
-
 	if err := utils.WriteJSON(config.SystemConfigFile, sysConfig); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system config"})
 		return
@@ -1204,38 +1095,6 @@ func UpdateSystemConfig(c *gin.Context) {
 	InitDocker()
 
 	c.JSON(http.StatusOK, sysConfig)
-}
-
-func migrateAuthModeData(from, to string) error {
-	dataFile := filepath.Join(config.DataDir, "data.json")
-	adminUserFile := filepath.Join(config.UsersDir, "admin.json")
-
-	if from == "single" && to == "multi" {
-		if _, err := os.Stat(dataFile); err != nil {
-			return nil
-		}
-		if _, err := os.Stat(adminUserFile); err == nil {
-			return nil
-		}
-		src, err := os.ReadFile(dataFile)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(adminUserFile, src, 0644)
-	}
-
-	if from == "multi" && to == "single" {
-		if _, err := os.Stat(adminUserFile); err != nil {
-			return nil
-		}
-		src, err := os.ReadFile(adminUserFile)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(dataFile, src, 0644)
-	}
-
-	return nil
 }
 
 func StartDataWarmup() {

@@ -4,6 +4,8 @@ import { useStorage } from "@vueuse/core";
 import type { AppConfig, SystemConfig } from "@/types";
 import { resolveManagedUrl } from "@/utils/runtimeUrls";
 
+const DEFAULT_MARKETPLACE_LIST_URL = "http://qdnas.icu:23111/";
+
 export const useConfigStore = defineStore("config", () => {
   // Pure client-only states (NOT synced to server)
   const forceNetworkMode = useStorage<"auto" | "lan" | "wan" | "latency">(
@@ -23,7 +25,7 @@ export const useConfigStore = defineStore("config", () => {
   const serverSyncLockCount = ref(0);
 
   // Version / update checking
-  const currentVersion = "1.2.6";
+  const currentVersion = "1.2.5dev5";
   const latestVersion = ref("");
   const dockerUpdateAvailable = ref(false);
   const updateCheckLastAt = useStorage<number>("flat-nas-update-check-last-at", 0);
@@ -48,34 +50,8 @@ export const useConfigStore = defineStore("config", () => {
     if (!url) return "";
     if (url.startsWith("data:") || url.startsWith("blob:")) return url;
     const resolved = resolveManagedUrl(url);
-
-    // 内容寻址缓存路径（SHA-256），无需 cache-busting
-    if (resolved.startsWith("/icon-cache/")) {
-      return resolved;
-    }
-
-    // 壁纸资源已自带防缓存机制（文件名包含时间戳），
-    // 添加 ?t= 会导致外网代理/CDN 返回 409 Conflict，故直接返回干净 URL
-    if (isWallpaperPath(resolved)) {
-      return resolved;
-    }
-
-    // 外部 CDN URL 不加 cache-busting，避免 CDN 拒绝缓存破坏参数
-    if (/^https?:\/\//i.test(resolved)) {
-      return resolved;
-    }
-
-    // 其他本地资源保持原有的缓存破坏逻辑
     const connector = resolved.includes("?") ? "&" : "?";
     return `${resolved}${connector}t=${resourceVersion.value}`;
-  };
-
-  const isWallpaperPath = (url: string): boolean => {
-    const normalized = url.toLowerCase();
-    return (
-      normalized.includes("/backgrounds/") ||
-      normalized.includes("/mobile_backgrounds/")
-    );
   };
 
   const appConfig = ref<AppConfig>({
@@ -113,11 +89,9 @@ export const useConfigStore = defineStore("config", () => {
     showCardBackground: true,
     iconShape: "rounded",
     searchEngines: [
-      { id: "google", key: "google", label: "Google", urlTemplate: "https://www.google.com/search?q={q}" },
       { id: "bing", key: "bing", label: "Bing", urlTemplate: "https://cn.bing.com/search?q={q}" },
-      { id: "baidu", key: "baidu", label: "百度", urlTemplate: "https://www.baidu.com/s?wd={q}" },
     ],
-    defaultSearchEngine: "google",
+    defaultSearchEngine: "bing",
     rememberLastEngine: true,
     groupTitleColor: "#ffffff",
     groupGap: 30,
@@ -147,6 +121,7 @@ export const useConfigStore = defineStore("config", () => {
     customJsDisclaimerAgreed: false,
     mouseHoverEffect: "scale",
     autoUltrawide: false,
+    marketplaceListUrl: DEFAULT_MARKETPLACE_LIST_URL,
     networkRules: "",
     networkPresets: {
       tailscale: false,

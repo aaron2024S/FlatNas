@@ -33,15 +33,6 @@ export function createDefaultWidgetList(isLoggedIn: boolean): WidgetConfig[] {
       rowSpan: 2,
       isPublic: true,
     },
-    {
-      id: "system-status",
-      type: "system-status",
-      enable: false,
-      isPublic: true,
-      colSpan: 1,
-      rowSpan: 1,
-      data: { useMock: false },
-    },
     { id: "memo", type: "memo", enable: true, colSpan: 1, rowSpan: 1, isPublic: true },
     { id: "todo", type: "todo", enable: true, colSpan: 1, rowSpan: 1, isPublic: true },
     {
@@ -68,7 +59,7 @@ export function createDefaultWidgetList(isLoggedIn: boolean): WidgetConfig[] {
   // Filter out login-only widgets for guests
   if (!isLoggedIn) {
     return base.filter((w) => {
-      const loginOnly = ["docker", "file-transfer", "system-status", "sidebar", "status-monitor"];
+      const loginOnly = ["docker", "file-transfer", "sidebar", "status-monitor"];
       return !loginOnly.includes(w.id);
     });
   }
@@ -83,7 +74,12 @@ export function normalizeIncomingWidgets(
   input?: WidgetConfig[],
   isLoggedIn?: boolean,
 ): WidgetConfig[] {
-  const nextWidgets = Array.isArray(input) ? input.map((widget) => ({ ...widget })) : [];
+  const nextWidgets = Array.isArray(input)
+    ? input
+        // 旧 system-status 大卡片 widget 已被"系统状态"分组取代，直接从存量配置中删除
+        .filter((widget) => widget.type !== "system-status")
+        .map((widget) => ({ ...widget }))
+    : [];
 
   if (nextWidgets.length === 0) {
     return createDefaultWidgetList(!!isLoggedIn);

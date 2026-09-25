@@ -328,7 +328,9 @@ export const useNetworkStore = defineStore("network", () => {
   };
 
   // ---- Dashboard Pulse ----
-  const DASHBOARD_PULSE_INTERVAL = 15000;
+  // Docker 卡片 CPU/RAM / 音乐播放器状态的轮询周期。
+  // 原 15s 用户反馈"不灵敏"，2026-09-18 改 5s（后端 statsTTL 同步缩短到 4s 配套）。
+  const DASHBOARD_PULSE_INTERVAL = 5000;
   const dashboardPulseCallbacks = new Set<() => void>();
   let dashboardPulseTimer: ReturnType<typeof setInterval> | null = null;
 

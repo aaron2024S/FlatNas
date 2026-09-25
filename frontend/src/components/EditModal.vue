@@ -18,6 +18,10 @@ const props = defineProps<{
   // ✨✨✨ 新增关键参数：当前分组ID (必须有这个才能支持分组添加)
   groupId?: string;
   onSave?: (payload: { item: NavItem; groupId?: string }) => Promise<void>;
+  // 弹窗层级（默认 50；在其他弹窗内部复用时可以调高）
+  zIndex?: number;
+  // 显式指定"添加/修改"模式：预填数据的新增场景需要强制显示"添加新项目"
+  mode?: "add" | "edit";
 }>();
 
 const emit = defineEmits(["update:show", "save"]);
@@ -48,26 +52,7 @@ const isVertical = computed(() => {
   return (layout || store.appConfig.cardLayout) === "vertical";
 });
 
-// 合并描述字段的计算属性
-const mergedDescription = computed({
-  get: () => {
-    const d1 = form.value.description1 || "";
-    const d2 = form.value.description2 || "";
-    const d3 = form.value.description3 || "";
-    // 如果有后面行的内容，则保留前面的换行符
-    if (d3) return `${d1}\n${d2}\n${d3}`;
-    if (d2) return `${d1}\n${d2}`;
-    return d1;
-  },
-  set: (val: string) => {
-    const lines = val.split("\n");
-    form.value.description1 = lines[0] || "";
-    form.value.description2 = lines[1] || "";
-    form.value.description3 = lines[2] || "";
-  },
-});
-
-// 自动调整高度
+// 自动调整高度（保留给未来多行输入复用）
 const autoResize = (event: Event) => {
   const el = event.target as HTMLTextAreaElement;
   el.style.height = "auto";
@@ -430,6 +415,14 @@ const cacheIconToLocal = async (icon: string): Promise<{ path: string | null; er
   }
 };
 
+const modalTitle = computed(() => {
+  if (props.mode === "add") return "添加新项目";
+  if (props.mode === "edit") return "修改项目";
+  return props.data ? "修改项目" : "添加新项目";
+});
+
+const overlayZIndex = computed(() => props.zIndex ?? 50);
+
 // 提交保存
 const submit = async () => {
   if (!form.value.title && !form.value.url) return alert("标题和链接总得写一个吧！");
@@ -473,7 +466,7 @@ const submit = async () => {
 <template>
   <OverlayMotion
     :show="show"
-    :z-index="50"
+    :z-index="overlayZIndex"
     close-on-overlay
     overlay-class="bg-black/20 backdrop-blur-sm p-4"
     panel-class="max-w-md"
@@ -486,7 +479,7 @@ const submit = async () => {
       <div
         class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white select-none"
       >
-        <h3 class="text-lg font-bold text-gray-800">{{ data ? "修改项目" : "添加新项目" }}</h3>
+        <h3 class="text-lg font-bold text-gray-800">{{ modalTitle }}</h3>
 
         <div class="flex items-center gap-2 ml-auto mr-4">
           <GroupSelector v-model="localGroupId" />
@@ -542,18 +535,13 @@ const submit = async () => {
         </div>
 
         <div v-if="!isVertical">
-          <label class="block text-xs font-medium text-gray-500 mb-1"
-            >描述 (水平模式显示，每行对应一行文字)</label
-          >
-          <textarea
-            v-model="mergedDescription"
-            @input="autoResize"
-            class="w-full px-3 py-2 rounded-lg border border-gray-200 focus:border-gray-900 outline-none transition-colors text-sm resize-none overflow-hidden"
-            placeholder="第一行 (上)
-第二行 (中)
-第三行 (下)"
-            rows="3"
-          ></textarea>
+          <label class="block text-xs font-medium text-gray-500 mb-1">描述 (显示在 CPU/内存信息下方)</label>
+          <input
+            v-model="form.description1"
+            type="text"
+            class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-gray-900 outline-none transition-colors text-sm"
+            placeholder="例如：Home Assistant 智能家居"
+          />
         </div>
 
         <div>

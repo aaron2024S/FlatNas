@@ -21,6 +21,24 @@ export interface NavItem {
   containerName?: string;
   allowRestart?: boolean;
   allowStop?: boolean;
+  /** 系统状态卡片（宿主机状态栏生成）：CPU / 内存 / 磁盘 */
+  sysStat?: SysStatConfig;
+}
+
+export interface SysStatConfig {
+  kind: "cpu" | "mem" | "disk";
+  /** 磁盘卡片的挂载点（如 /HDD_1），对应 /api/system/stats 的 disk[].mount */
+  mount?: string;
+  /** 自定义标题（默认 CPU / RAM / 磁盘N） */
+  title?: string;
+  /** 主色：进度条填充色（留空 = 跟随文字颜色） */
+  primaryColor?: string;
+  /** 副色：进度条轨道色（留空 = 文字色半透明） */
+  secondaryColor?: string;
+  /** 文字颜色（留空 = 跟随卡片标题色，与普通卡片一致） */
+  textColor?: string;
+  /** 卡片背景颜色（留空 = 跟随卡片背景，与普通卡片一致） */
+  bgColor?: string;
 }
 
 export interface NavGroup {
@@ -29,6 +47,8 @@ export interface NavGroup {
   icon?: string;
   items: NavItem[];
   isPublic?: boolean;
+  /** 手机端隐藏整个分组（移动端设备不渲染该组；编辑模式不受影响） */
+  hideOnMobile?: boolean;
   titleColor?: string;
   preset?: boolean;
   cardLayout?: "vertical" | "horizontal" | string;
@@ -186,7 +206,18 @@ export interface AppConfig {
   mouseHoverEffect?: "scale" | "lift" | "glow" | "none" | string;
   autoUltrawide?: boolean;
   hideHeaderOnMobile?: boolean;
-  locale?: string;
+  marketplaceListUrl?: string;
+}
+
+export interface MarketplaceItem {
+  id: string;
+  name: string;
+  description?: string;
+  type: "css" | "js" | "component" | "css+js" | "js+component" | "css+component" | "css+js+component";
+  css?: string;
+  js?: string;
+  component?: { title: string; html: string; css: string };
+  useProxy?: boolean;
 }
 
 export interface SystemConfig {

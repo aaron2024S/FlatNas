@@ -67,23 +67,10 @@ export const useSyncStore = defineStore("sync", () => {
       onConnected: (ws) => {
         if (ws?.url) trackWsUrlChange(ws.url);
         wsContinuousFailures = 0;
-        rapidDisconnectCount = 0;
         networkStore.markFresh();
       },
       onDisconnected: () => {
         wsContinuousFailures++;
-        // Rapid failure detection: if 3+ disconnects within 5s, WS is likely blocked by proxy
-        const now = Date.now();
-        if (now - lastDisconnectTime < 5000) {
-          rapidDisconnectCount++;
-          if (rapidDisconnectCount >= 3 && auth.isLogged && !isHttpPollingActive) {
-            console.warn("[WS] Rapid failures detected (proxy env?), starting HTTP polling immediately");
-            startHttpPolling();
-          }
-        } else {
-          rapidDisconnectCount = 1;
-        }
-        lastDisconnectTime = now;
         if (wsContinuousFailures > 6) {
           console.warn(`[WS] ${wsContinuousFailures} consecutive disconnections, scheduling immediate sync`);
           setTimeout(() => fetchAndProcessData(), 0);
@@ -91,10 +78,6 @@ export const useSyncStore = defineStore("sync", () => {
       },
     },
   );
-
-  // Rapid failure detection for proxy environments where WS upgrade is unsupported
-  let rapidDisconnectCount = 0;
-  let lastDisconnectTime = 0;
 
   let wsHealthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -294,6 +277,13 @@ export const useSyncStore = defineStore("sync", () => {
       delete (mergedConfig as Record<string, unknown>).forceNetworkMode;
       configStore.appConfig = mergedConfig as typeof configStore.appConfig;
     }
+    if (
+      !configStore.appConfig.marketplaceListUrl ||
+      configStore.appConfig.marketplaceListUrl === cacheStore.DEV_MARKETPLACE_LIST_URL ||
+      configStore.appConfig.marketplaceListUrl === cacheStore.LEGACY_DEFAULT_MARKETPLACE_LIST_URL
+    ) {
+      configStore.appConfig.marketplaceListUrl = cacheStore.DEFAULT_MARKETPLACE_LIST_URL;
+    }
     // Migrations
     const ac = configStore.appConfig;
     if (ac.customCss && !ac.customCssList?.length) ac.customCssList = [{ id: "default-css", name: "默认自定义 CSS", content: ac.customCss, enable: true }];
@@ -323,14 +313,35 @@ export const useSyncStore = defineStore("sync", () => {
         configStore.appConfig.mobileBackground,
       ) as string;
     }
+    // 迁移：旧版“自动更新 API 壁纸”（如 Bing 每日壁纸）会把图片下载到服务器再设置路径。
+    // 现已改为打开网页时实时从 API 拉取，这里把旧的自动下载壁纸迁移为 API 地址直连。
+    // 仅当当前背景仍是旧流程自动下载的文件（blob_*/wallpaper_*）时才迁移，避免覆盖用户手动选择的本地壁纸。
+    const migrateApiWallpaper = (
+      cfg: { enabled?: boolean; url?: string } | undefined,
+      background: string | undefined,
+    ) => {
+      if (!cfg?.enabled || !cfg.url || !/^https?:\/\//i.test(cfg.url)) return false;
+      if (!background) return false;
+      if (!/^\/(mobile_)?backgrounds\/(blob_|wallpaper_)\d+\.[a-zA-Z0-9]+$/.test(background)) {
+        return false;
+      }
+      return true;
+    };
+    if (migrateApiWallpaper(ac.wallpaperConfig, configStore.appConfig.background)) {
+      configStore.appConfig.background = ac.wallpaperConfig!.url!;
+    }
+    if (
+      migrateApiWallpaper(ac.mobileWallpaperConfig, configStore.appConfig.mobileBackground)
+    ) {
+      configStore.appConfig.mobileBackground = ac.mobileWallpaperConfig!.url!;
+    }
     if (!configStore.appConfig.searchEngines?.length) {
+      // 内置引擎默认只带 Bing，其余由用户在设置里自行添加
       configStore.appConfig.searchEngines = [
-        { id: "google", key: "google", label: "Google", urlTemplate: "https://www.google.com/search?q={q}" },
         { id: "bing", key: "bing", label: "Bing", urlTemplate: "https://cn.bing.com/search?q={q}" },
-        { id: "baidu", key: "baidu", label: "百度", urlTemplate: "https://www.baidu.com/s?wd={q}" },
       ];
     }
-    if (!configStore.appConfig.defaultSearchEngine) configStore.appConfig.defaultSearchEngine = "google";
+    if (!configStore.appConfig.defaultSearchEngine) configStore.appConfig.defaultSearchEngine = "bing";
     if (typeof configStore.appConfig.rememberLastEngine !== "boolean") configStore.appConfig.rememberLastEngine = true;
     if (typeof configStore.appConfig.widgetAreaCols !== "number") {
       configStore.appConfig.widgetAreaCols = typeof configStore.appConfig.widgetAreaSize === "number" ? configStore.appConfig.widgetAreaSize : 4;
@@ -376,45 +387,6 @@ export const useSyncStore = defineStore("sync", () => {
     finally { cacheStore.isFetchingData = false; }
   };
 
-  // ---- 增量合并：批量拉取变化的 widget ----
-  const fetchAndMergeWidgets = async (changedIds: string[], deletedIds: string[]) => {
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (auth.token) headers["Authorization"] = `Bearer ${auth.token}`;
-      const res = await fetch("/api/widgets/batch", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ ids: changedIds }),
-      });
-      if (!res.ok) throw new Error(`Batch fetch failed: ${res.status}`);
-      const result = await res.json() as { success?: boolean; widgets?: any[] };
-      if (!result.success || !Array.isArray(result.widgets)) throw new Error("Invalid batch response");
-
-      isApplyingServerData = true;
-      // 合并变化的 widget
-      for (const sw of result.widgets) {
-        const idx = widgetsStore.widgets.findIndex((x: any) => x.id === sw.id);
-        if (idx >= 0) {
-          widgetsStore.widgets[idx] = { ...widgetsStore.widgets[idx], ...sw };
-        } else {
-          widgetsStore.widgets.push(sw);
-        }
-      }
-      // 删除已移除的 widget
-      if (deletedIds.length > 0) {
-        const delSet = new Set(deletedIds);
-        widgetsStore.widgets = widgetsStore.widgets.filter((w: any) => !delSet.has(w.id));
-      }
-      isApplyingServerData = false;
-      cacheStore.saveToCache(buildCacheSnapshot({}));
-    } catch (e) {
-      // 增量失败，降级全量
-      console.warn("[DeltaPush] Incremental failed, fallback to full sync", e);
-      isApplyingServerData = false;
-      await fetchAndProcessData();
-    }
-  };
-
   // ---- WebSocket connect watch ----
   watch(status, async (newStatus) => {
     if (newStatus === "OPEN") {
@@ -427,7 +399,6 @@ export const useSyncStore = defineStore("sync", () => {
       if (auth.isLogged && auth.token) wsSend({ type: "auth", payload: { token: auth.token } });
       networkStore.startNetworkHeartbeat(wsSend);
       startWsHealthCheck();
-      startVersionCheck();
       if (isFirstConnect) return;
       try {
         const serverVersion = await fetchVersionOnly();
@@ -451,7 +422,6 @@ export const useSyncStore = defineStore("sync", () => {
     } else if (newStatus === "CLOSED") {
       if (newStatus === "CLOSED") { console.log("WS disconnected"); wsContinuousFailures++; }
       networkStore.stopNetworkHeartbeat();
-      stopVersionCheck();
       // Only trigger HTTP polling fallback when authenticated; guests use HTTP-only mode
       if (auth.isLogged && wsContinuousFailures >= WS_FALLBACK_THRESHOLD && !isHttpPollingActive) startHttpPolling();
     }
@@ -467,7 +437,6 @@ export const useSyncStore = defineStore("sync", () => {
       case "auth_success": break;
       case "memo_updated": case "todo_updated": case "bookmarks_updated": {
         const p = msg.payload || {};
-        if (p.username !== auth.username) return;
         if (p.widgetId) {
           const w = widgetsStore.widgets.find((x) => x.id === p.widgetId);
           if (w) {
@@ -487,18 +456,7 @@ export const useSyncStore = defineStore("sync", () => {
           if (sv > pendingServerVersion.value) pendingServerVersion.value = sv; return;
         }
         dataVersion.value = sv;
-
-        const structureChanged = p.structureChanged === true;
-        const changedWidgets = (p.changedWidgets || []) as string[];
-        const deletedWidgets = (p.deletedWidgets || []) as string[];
-
-        if (!structureChanged && changedWidgets.length > 0 && changedWidgets.length <= 5) {
-          // 增量路径：批量拉取变化的 widget
-          fetchAndMergeWidgets(changedWidgets, deletedWidgets);
-        } else {
-          // 全量路径（含向后兼容：老后端无 changedWidgets 字段时走此分支）
-          fetchAndProcessData();
-        }
+        fetchAndProcessData();
         break;
       }
       case "network_heartbeat": networkStore.lastNetworkHeartbeatAt = Date.now(); networkStore.isNetworkSyncActive = true; break;
@@ -507,71 +465,11 @@ export const useSyncStore = defineStore("sync", () => {
     }
   });
 
-  // ---- BroadcastChannel: 同浏览器多 Tab 即时同步 ----
-  let bc: BroadcastChannel | null = null;
-  let bcInited = false;
-
-  const initBroadcastChannel = () => {
-    if (bcInited || typeof BroadcastChannel === "undefined") return;
-    bcInited = true;
-    bc = new BroadcastChannel("flatnas-sync");
-    bc.onmessage = (event) => {
-      const msg = event.data;
-      if (!msg?.type) return;
-      switch (msg.type) {
-        case "saved": {
-          const sv = normalizeVersion(msg.version);
-          if (sv > dataVersion.value && !isApplyingServerData) {
-            console.log(`[BC] Tab saved v${sv}, syncing...`);
-            dataVersion.value = sv;
-            // jitter 防止多 Tab 同时请求（惊群效应）
-            setTimeout(() => fetchAndProcessData(), Math.random() * 500);
-          }
-          break;
-        }
-        case "logout": {
-          if (auth.isLogged) doLogout();
-          break;
-        }
-      }
-    };
-    window.addEventListener("beforeunload", () => { bc?.close(); });
-  };
-
-  const broadcastSaved = (version: number) => {
-    bc?.postMessage({ type: "saved", version });
-  };
-
-  // ---- 心跳版本校验（WS 在线时的安全网） ----
-  let versionCheckTimer: ReturnType<typeof setInterval> | null = null;
-  const VERSION_CHECK_INTERVAL = 60000; // 60s
-
-  const startVersionCheck = () => {
-    if (versionCheckTimer) return;
-    versionCheckTimer = setInterval(async () => {
-      if (status.value !== "OPEN" || !auth.isLogged) return;
-      if (document.visibilityState === "hidden") return;
-      if (saveStore.isSaving || isApplyingServerData) return;
-      try {
-        const serverVer = await fetchVersionOnly();
-        if (serverVer > dataVersion.value) {
-          console.log(`[VersionCheck] Server v${serverVer} > local v${dataVersion.value}, syncing...`);
-          await fetchAndProcessData();
-        }
-      } catch { /* ignore */ }
-    }, VERSION_CHECK_INTERVAL);
-  };
-
-  const stopVersionCheck = () => {
-    if (versionCheckTimer) { clearInterval(versionCheckTimer); versionCheckTimer = null; }
-  };
-
   // ---- init ----
   const init = async () => {
     if (isInitializing) return;
     isInitializing = true;
     initCompleted.value = false;
-    initBroadcastChannel();
     // Only open WS when authenticated; avoid meaningless guest reconnect loops
     if (typeof window !== "undefined" && auth.isLogged && status.value !== "OPEN") wsOpen();
     cacheStore.hasServerSnapshot = false;
@@ -610,42 +508,9 @@ export const useSyncStore = defineStore("sync", () => {
         wsMessageHandlerBound = true;
         if (typeof document !== "undefined" && !visibilityVersionCheckBound) {
           visibilityVersionCheckBound = true;
-
-          const onWakeUp = () => {
-            if (!auth.isLogged) return;
-            // 延迟 500ms 给移动端网络层恢复时间
-            setTimeout(async () => {
-              if (!auth.isLogged) return;
-              try {
-                const serverVer = await fetchVersionOnly();
-                if (serverVer > dataVersion.value) {
-                  console.log(`[WakeUp] Server v${serverVer} > local v${dataVersion.value}, syncing...`);
-                  dataVersion.value = serverVer;
-                  await fetchAndProcessData();
-                }
-              } catch { /* ignore */ }
-              // WS 断了就重连
-              if (status.value !== "OPEN" && status.value !== "CONNECTING") {
-                console.log("[WakeUp] WS not connected, reopening...");
-                wsOpen();
-              }
-            }, 500);
-          };
-
-          // 自动检测：触屏设备使用更激进的唤醒策略
-          const isTouchDevice = typeof window !== "undefined"
-            && window.matchMedia("(pointer: coarse)").matches;
-
           document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "visible") onWakeUp();
+            if (document.visibilityState === "visible") saveStore.checkVersionAfterActivation(auth.isLogged, dataVersion.value, fetchVersionOnly);
           });
-
-          if (isTouchDevice) {
-            window.addEventListener("pageshow", (e) => {
-              if ((e as PageTransitionEvent).persisted) onWakeUp();
-            });
-            window.addEventListener("focus", onWakeUp);
-          }
         }
       }
     }
@@ -658,8 +523,6 @@ export const useSyncStore = defineStore("sync", () => {
     networkStore.stopNetworkHeartbeat();
     stopHttpPolling();
     stopPingCheck();
-    stopVersionCheck();
-    bc?.postMessage({ type: "logout" });
     auth.token = "";
     auth.username = "";
     localStorage.removeItem("flat-nas-token");
@@ -671,14 +534,11 @@ export const useSyncStore = defineStore("sync", () => {
   // ---- saveData wrapper ----
   const saveData = async (immediate = false, force = false) => {
     const result = await saveStore.saveData(immediate, force, dataVersion, rssFeeds, rssCategories, fetchAndProcessData);
-    if (result === "saved") {
-      broadcastSaved(dataVersion.value);
-      if (pendingServerVersion.value > 0 && pendingServerVersion.value > dataVersion.value) {
-        const psv = pendingServerVersion.value;
-        pendingServerVersion.value = 0;
-        dataVersion.value = psv;
-        await fetchAndProcessData();
-      }
+    if (result === "saved" && pendingServerVersion.value > 0 && pendingServerVersion.value > dataVersion.value) {
+      const psv = pendingServerVersion.value;
+      pendingServerVersion.value = 0;
+      dataVersion.value = psv;
+      await fetchAndProcessData();
     }
     return result;
   };
@@ -745,6 +605,10 @@ export const useSyncStore = defineStore("sync", () => {
   watch(widgetsStore.widgets, markDirtyIfActive, { deep: true });
   watch(rssFeeds, markDirtyIfActive, { deep: true });
   watch(rssCategories, markDirtyIfActive, { deep: true });
+  // groups 之前漏掉了：分组内任何改动（标题/颜色/批量公开等）都不会自动标脏，
+  // 导致 GroupSettingsModal 里改完不保存。缓存加载在 init（isInitializing）内、
+  // 服务端数据在 isApplyingServerData 内应用，均不会误标脏。
+  watch(() => groupsStore.groups, markDirtyIfActive, { deep: true });
   watch(() => saveStore.hasUnsavedChanges, (dirty, wasDirty) => {
     if (wasDirty && !dirty && pendingServerVersion.value > 0 && pendingServerVersion.value > dataVersion.value && !saveStore.isSaving) {
       const psv = pendingServerVersion.value;
