@@ -1,5 +1,9 @@
 # ============================================================================
-# FlatNas（本 fork）—— 构建多架构（amd64 + arm64）镜像并推送到 Docker Hub
+# FlatNas（本 fork）—— 构建 x86_64（linux/amd64）镜像并推送到 Docker Hub
+#
+#   为什么只有 amd64：本 fork 只在 Intel/AMD 的 NAS 上用。
+#   单架构不需要 QEMU 模拟，构建更快、更不容易出（arm64 特有的原生编译）问题。
+#   将来真要 arm64，把 platforms 加回「,linux/arm64」并恢复 QEMU 步骤即可。
 #
 # 怎么用（只在需要出新镜像时才跑，不会自动乱跑）：
 #   GitHub 仓库页 → Actions → 左侧选「docker-build-push」
@@ -16,9 +20,8 @@
 #   and enable them」，否则 Run workflow 按钮点了也不会跑。
 #
 # 构建耗时：前端要 npm ci + vite build（容器内重编），后端要 go build。
-#   Dockerfile 里两个 stage 都固定在构建机架构上跑（前端原生构建一次、两条腿共用；
-#   后端原生交叉编译），所以**整个构建不经过 QEMU**，双架构也不额外变慢。
-#   首次无缓存时通常 5~12 分钟，之后有 GitHub 缓存会更快。
+#   Dockerfile 里两个 build stage 都固定在构建机架构（x86）上跑，与目标架构一致，
+#   全程不经过 QEMU。首次无缓存时通常 4~8 分钟，之后有 GitHub 缓存会更快。
 # ============================================================================
 name: docker-build-push
 
@@ -48,14 +51,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v7
 
-      # 说明：Dockerfile 前后两个 stage 都固定在构建机架构上跑（前端原生构建一次、
-      #   后端原生交叉编译），正常情况**不会真的用到 QEMU**。这一步保留着，是为了将来
-      #   有人往 Dockerfile 里加「必须在目标架构上运行」的步骤时能直接生效。
-      # 只想要 x86（NAS 是 Intel/AMD）的话：删掉这一步，并把下面 platforms 里的
-      #「,linux/arm64」去掉，构建能再快一点。
-      - name: 准备 QEMU（构建 arm64 用）
-        uses: docker/setup-qemu-action@v4
-
+      # 只构建 x86，因此**不需要 QEMU**（已移除 setup-qemu 步骤）。
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -71,7 +67,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           # 手动触发时用你填的标签；若改用 tag 触发，则自动用 tag 名
           tags: ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || github.ref_name }}
@@ -84,6 +80,6 @@ jobs:
           echo "### 镜像已推送" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- 名称：\`$DOCKERHUB_USER/$IMAGE_NAME:${{ inputs.tag || github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 架构：\`linux/amd64, linux/arm64\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 架构：\`linux/amd64\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- 摘要：\`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- 拉取：\`docker pull $DOCKERHUB_USER/$IMAGE_NAME:${{ inputs.tag || github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
