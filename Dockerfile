@@ -1,5 +1,14 @@
 # Stage 1: Build Frontend
-FROM node:20.19-bookworm-slim AS frontend-builder
+#
+# 这里必须写 --platform=$BUILDPLATFORM（构建机架构），不要用目标架构：
+#   前端产物只是静态的 JS / HTML / CSS，与 CPU 架构无关，没必要为 arm64 再跑一遍。
+#   不写这一句时，构建 arm64 镜像会在 x86 的构建机上用 QEMU 模拟着「跑 npm ci」，
+#   既慢 5~10 倍，又极易让 npm 直接崩掉 —— 实测 GitHub Actions 第 1 次构建就挂在
+#   `[linux/arm64 ...] RUN npm ci`，报 exit code 146；而同一次构建里 amd64 那条腿的
+#   npm ci 与 npm run build-only 都正常。
+#   后端 stage（backend-builder）本来就是「BUILDPLATFORM + 交叉编译」的写法，
+#   前端也改成同样写法后，整个构建过程不再需要 QEMU。
+FROM --platform=$BUILDPLATFORM node:20.19-bookworm-slim AS frontend-builder
 
 # 1. 接收构建参数（代理地址）
 ARG HTTP_PROXY

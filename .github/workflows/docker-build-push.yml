@@ -15,9 +15,10 @@
 #   第一次要先打开仓库的 Actions 页，点「I understand my workflows, go ahead
 #   and enable them」，否则 Run workflow 按钮点了也不会跑。
 #
-# 构建耗时：前端要 npm ci + vite build（容器内重编），后端要 go build，
-#   arm64 走 QEMU 软件模拟（速度约原生的 1/5~1/10），且首次没有缓存 ——
-#   第一次双架构预计 20~35 分钟，属正常。跑完会留下 GitHub 缓存，之后会明显变快。
+# 构建耗时：前端要 npm ci + vite build（容器内重编），后端要 go build。
+#   Dockerfile 里两个 stage 都固定在构建机架构上跑（前端原生构建一次、两条腿共用；
+#   后端原生交叉编译），所以**整个构建不经过 QEMU**，双架构也不额外变慢。
+#   首次无缓存时通常 5~12 分钟，之后有 GitHub 缓存会更快。
 # ============================================================================
 name: docker-build-push
 
@@ -47,10 +48,11 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v7
 
+      # 说明：Dockerfile 前后两个 stage 都固定在构建机架构上跑（前端原生构建一次、
+      #   后端原生交叉编译），正常情况**不会真的用到 QEMU**。这一步保留着，是为了将来
+      #   有人往 Dockerfile 里加「必须在目标架构上运行」的步骤时能直接生效。
       # 只想要 x86（NAS 是 Intel/AMD）的话：删掉这一步，并把下面 platforms 里的
-      #「,linux/arm64」去掉，构建能快一大截。
-      # 后端本身支持交叉编译（Dockerfile 里用 --platform=$BUILDPLATFORM + TARGETARCH），
-      # 但前端那一步没有编译型原生模块，QEMU 主要是给整个 arm64 构建兜底。
+      #「,linux/arm64」去掉，构建能再快一点。
       - name: 准备 QEMU（构建 arm64 用）
         uses: docker/setup-qemu-action@v4
 
