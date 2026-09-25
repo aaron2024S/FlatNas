@@ -15,8 +15,9 @@
 #   第一次要先打开仓库的 Actions 页，点「I understand my workflows, go ahead
 #   and enable them」，否则 Run workflow 按钮点了也不会跑。
 #
-# 构建耗时：前端要 npm ci + vite build，后端要 go build，arm64 走 QEMU 模拟，
-#   第一次跑大约十几到二十分钟，属正常。
+# 构建耗时：前端要 npm ci + vite build（容器内重编），后端要 go build，
+#   arm64 走 QEMU 软件模拟（速度约原生的 1/5~1/10），且首次没有缓存 ——
+#   第一次双架构预计 20~35 分钟，属正常。跑完会留下 GitHub 缓存，之后会明显变快。
 # ============================================================================
 name: docker-build-push
 
