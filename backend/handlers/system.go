@@ -431,7 +431,8 @@ func fetchIPFromProvider(provider string) (*IPInfo, error) {
 		return info, nil
 
 	case "ipwhois":
-		resp, err := client.Get("http://ipwho.is/")
+		// 免费版只认 lang=zh-CN（写 zh / zh-Hans 都会退回英文），带上它才会返回中文地名。
+		resp, err := client.Get("http://ipwho.is/?lang=zh-CN")
 		if err != nil {
 			return nil, err
 		}
@@ -526,6 +527,35 @@ func fetchIPFromProvider(provider string) (*IPInfo, error) {
 
 var ipProviders = []string{"ip-api", "ipwhois", "ipapi-co", "freeipapi"}
 
+// buildIPLocation 把数据源返回的地理字段拼成「国家 省 市」。
+//
+// 两处刻意的取舍，都是为了地名语言稳定（用户报过「一会儿中文、一会儿拼音、一会儿中英混合」）：
+//  1. **不拼 ISP**：四个数据源里 ISP 一律只有英文（如 "Chunghwa Telecom Co., Ltd."），
+//     拼上去必然出现「中国 江苏 南京 Chunghwa…」这种中英混排。
+//  2. **相邻重复片段只保留一个**：ip-api 的中文模式下 regionName 有时就等于 city
+//     （硬拼会出来「台湾 新竹市 新竹市」）；ipwhois 的中文则是「臺北市」+「臺北」，
+//     所以判据用「后一段是前一段的子串」而不是严格相等。
+//
+// 注意这里不做翻译：ip-api / ipwhois 都靠请求参数拿中文（见 fetchIPFromProvider），
+// ipapi-co / freeipapi 只作最后兜底，仍是英文。
+func buildIPLocation(info *IPInfo) string {
+	if info == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	for _, seg := range []string{info.Country, info.Region, info.City} {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		if len(parts) > 0 && strings.Contains(parts[len(parts)-1], seg) {
+			continue
+		}
+		parts = append(parts, seg)
+	}
+	return strings.Join(parts, " ")
+}
+
 func fetchIPAndCache() bool {
 	if !atomic.CompareAndSwapInt32(&isFetchingIP, 0, 1) {
 		return false
@@ -539,16 +569,7 @@ func fetchIPAndCache() bool {
 			continue
 		}
 		if info.City != "" {
-			location := info.City
-			if info.Region != "" {
-				location = info.Region + " " + location
-			}
-			if info.Country != "" {
-				location = info.Country + " " + location
-			}
-			if info.Isp != "" {
-				location = location + " " + info.Isp
-			}
+			location := buildIPLocation(info)
 			globalIPCache.Mutex.Lock()
 			globalIPCache.IP = info.IP
 			globalIPCache.City = info.City

@@ -2803,6 +2803,16 @@ const showClientIp = computed(() => {
   return ipInfo.value.clientIp !== ipInfo.value.wanIp;
 });
 
+// 访问来源 IP 的真实归属，决定第二行该标「内网」还是「外网」。
+// 通过域名（公网 IPv6）访问时 clientIp 会是 240e::/16 这类公网地址，
+// 原来无脑写死「内网」会让用户以为自己的公网地址是内网地址。
+const clientIpIsInternal = computed(() => {
+  const ip = String(ipInfo.value.clientIp || "").trim();
+  if (!ip) return false;
+  return isInternalNetwork(ip);
+});
+const clientIpLabel = computed(() => (clientIpIsInternal.value ? "内网" : "外网"));
+
 const copiedToast = ref("");
 let copiedToastTimer: number | null = null;
 const copyToClipboard = async (text: string) => {
@@ -3791,12 +3801,12 @@ onUnmounted(() => {
                   {{ ipInfo.wanIp }}
                 </button>
               </div>
-              <div v-if="hasLanIp" class="flex items-center justify-center gap-2 w-full flex-1">
-                <span class="text-[10px] opacity-50 uppercase">内网</span>
+              <div v-if="hasLanIp && showClientIp" class="flex items-center justify-center gap-2 w-full flex-1">
+                <span class="text-[10px] opacity-50 uppercase">{{ clientIpLabel }}</span>
                 <button
                   class="max-w-full font-mono font-medium leading-tight text-center select-text break-all opacity-70 hover:opacity-90 transition-opacity text-sm"
                   type="button"
-                  title="点击复制内网 IP"
+                  :title="`点击复制${clientIpLabel} IP`"
                   @click.stop="copyToClipboard(ipInfo.lanIp)"
                 >
                   {{ ipInfo.lanIp }}

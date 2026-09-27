@@ -496,6 +496,12 @@ func GetData(c *gin.Context) {
 
 	// Inject system config
 	userData["systemConfig"] = sysConfig
+	// 显式身份标志：单用户模式下访客响应也会被注入 username:"admin"，
+	// 前端靠「响应里有没有 username+version」猜角色必然误判（sync.ts detectResponseRole）。
+	// 只在访客响应里带上该字段，已登录响应不带，避免污染用户数据 / 落下无谓 diff。
+	if isGuest {
+		userData["isGuest"] = true
+	}
 	// Single-user mode must always present as admin, even if old data files carry stale usernames.
 	if sysConfig.AuthMode == "single" && username == "admin" {
 		userData["username"] = "admin"

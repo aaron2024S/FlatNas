@@ -2,6 +2,7 @@ import { ref, computed, watch } from "vue";
 import { defineStore } from "pinia";
 import { useWebSocket } from "@vueuse/core";
 import { normalizeVersion } from "@/utils/storeHelpers";
+import { detectResponseRole, shouldClearStaleToken } from "@/utils/responseRole";
 import type { LuckyStunData } from "@/types";
 import { useAuthStore } from "./auth";
 import { useWidgetsStore } from "./widgets";
@@ -169,15 +170,6 @@ export const useSyncStore = defineStore("sync", () => {
     return hasNonPublicWidget || hasNonPublicGroup;
   };
 
-  const detectResponseRole = (data: Record<string, unknown>): "auth" | "guest" => {
-    if (data.username && data.version !== undefined) return "auth";
-    if (Array.isArray(data.widgets)) {
-      const allPublic = (data.widgets as any[]).every((w: any) => w.isPublic === true);
-      if (allPublic && (data.widgets as any[]).length > 0) return "guest";
-    }
-    return "auth";
-  };
-
   const syncUsernameFromServer = (data: Record<string, unknown>, responseRole: "auth" | "guest") => {
     if (!auth.isLogged || responseRole !== "auth") return;
     const incomingSystemConfig = data.systemConfig as Record<string, unknown> | undefined;
@@ -246,6 +238,16 @@ export const useSyncStore = defineStore("sync", () => {
     isApplyingServerData = true;
     // Route by role: guest responses must never overwrite auth state layout
     const responseRole = detectResponseRole(data);
+
+    // token 已失效（过期 / 被服务端注销 / 数据被重置）：本地还自认已登录，但服务端明确回了访客身份。
+    // 必须主动清掉，否则前端会一直按已登录渲染，isPublic=false 的卡片继续显示。
+    // 只在服务端显式标志成立时触发 —— 不能拿启发式结果当依据，
+    // 否则会误伤「所有卡片恰好都是公开的已登录用户」。
+    if (shouldClearStaleToken(data, auth.isLogged)) {
+      console.warn("[Auth] 服务端返回访客身份，本地 token 已失效，正在清理");
+      auth.logout();
+    }
+
     const shouldApply = responseRole === "auth"
       ? auth.isLogged
       : true; // guest data can always update guest state
