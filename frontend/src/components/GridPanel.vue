@@ -867,94 +867,121 @@ const compactVertical = (layout: GridLayoutItem[]) => {
   return layout.map((it) => byId.get(it.i) || it);
 };
 
-watch(
-  () => [store.mergedWidgets, widgetColNum.value, deviceKey.value],
-  () => {
-    const nextDeviceKey = deviceKey.value;
-    const nextColNum = widgetColNum.value;
-    const shouldRemount =
-      nextDeviceKey !== lastDeviceKey.value || nextColNum !== lastWidgetColNum.value;
-    lastDeviceKey.value = nextDeviceKey;
-    lastWidgetColNum.value = nextColNum;
+/**
+ * 生成卡片区的布局（layoutData）。
+ *
+ * checkVisible（未登录只放行 isPublic）**只在这里跑一次**，结果会被 layoutData 缓存住，
+ * 所以任何影响可见性的状态变化都必须重新走一遍这个函数。
+ *
+ * @param force 忽略"编辑中不重算"的保护。登录态变化必须走这条路：token 失效被清空时
+ *              若不重算，未登录访客的页面上会继续留着 isPublic=false 的卡片。
+ */
+const rebuildLayout = (force = false) => {
+  const nextDeviceKey = deviceKey.value;
+  const nextColNum = widgetColNum.value;
+  const shouldRemount =
+    nextDeviceKey !== lastDeviceKey.value || nextColNum !== lastWidgetColNum.value;
+  lastDeviceKey.value = nextDeviceKey;
+  lastWidgetColNum.value = nextColNum;
 
-    if (isInternalUpdate) return;
+  if (isInternalUpdate) return;
 
-    // 防止编辑时因服务端推送导致的布局回弹 (Rebound)
-    // 处于编辑模式(活跃)时，忽略外部更新，以本地拖拽状态为准
-    if (isEditMode.value) return;
+  // 防止编辑时因服务端推送导致的布局回弹 (Rebound)
+  // 处于编辑模式(活跃)时，忽略外部更新，以本地拖拽状态为准
+  if (!force && isEditMode.value) return;
 
-    const visibleWidgets = store.mergedWidgets
-      .filter(
-        (w) =>
-          checkVisible(w) &&
-          isGridWidget(w) &&
-          !(deviceKey.value === "mobile" && w.hideOnMobile),
-      )
-      .sort((a, b) => {
-        // Sort by visual position (Row-major) to ensure correct reflow order
-        const ay = a.y ?? 0;
-        const by = b.y ?? 0;
-        if (ay !== by) return ay - by;
-        return (a.x ?? 0) - (b.x ?? 0);
-      });
-
-    const colNum = widgetColNum.value;
-
-    const widgetsToLayout = visibleWidgets.map((w) => {
-      const newW: WidgetConfig = { ...w };
-      const layouts = newW.layouts;
-      const key = deviceKey.value as "desktop" | "tablet" | "mobile";
-      const spec = layouts ? layouts[key] : undefined;
-      if (spec) {
-        newW.x = spec.x;
-        newW.y = spec.y;
-        newW.w = spec.w;
-        newW.h = spec.h;
-        newW.colSpan = spec.w;
-        newW.rowSpan = spec.h;
-      } else if (deviceKey.value === "mobile") {
-        // If no mobile layout exists, reset position to force auto-layout in reading order
-        newW.x = undefined;
-        newW.y = undefined;
-      }
-
-      // Safety: Ensure widget width does not exceed total columns
-      // This is critical when switching from wider to narrower layouts (e.g. desktop -> tablet)
-      if ((newW.w || 1) > colNum) newW.w = colNum;
-
-      if (deviceKey.value === "mobile") {
-        if (
-          [
-            "clockweather",
-            "calendar",
-            "rss",
-            "iframe",
-            "todo",
-            "memo",
-            "bookmarks",
-            "hot",
-          ].includes(newW.type)
-        ) {
-          newW.w = colNum;
-        }
-      }
-      return newW;
+  const visibleWidgets = store.mergedWidgets
+    .filter(
+      (w) =>
+        checkVisible(w) &&
+        isGridWidget(w) &&
+        !(deviceKey.value === "mobile" && w.hideOnMobile),
+    )
+    .sort((a, b) => {
+      // Sort by visual position (Row-major) to ensure correct reflow order
+      const ay = a.y ?? 0;
+      const by = b.y ?? 0;
+      if (ay !== by) return ay - by;
+      return (a.x ?? 0) - (b.x ?? 0);
     });
 
-    // 标记为程序化布局更新，避免触发保存循环
-    skipNextLayoutSave = true;
-    layoutData.value = compactVertical(generateLayout(widgetsToLayout, colNum));
-    
-    // 如果 deviceKey 发生变化，强制重新挂载 GridLayout 组件
-    // 这可以解决从窄屏切换回宽屏时布局错乱的问题，同时避免 :key 导致的死循环
-    if (shouldRemount && !isInternalUpdate && !isEditMode.value) {
-      isGridAlive.value = false;
-      nextTick(() => {
-        isGridAlive.value = true;
-      });
+  const colNum = widgetColNum.value;
+
+  const widgetsToLayout = visibleWidgets.map((w) => {
+    const newW: WidgetConfig = { ...w };
+    const layouts = newW.layouts;
+    const key = deviceKey.value as "desktop" | "tablet" | "mobile";
+    const spec = layouts ? layouts[key] : undefined;
+    if (spec) {
+      newW.x = spec.x;
+      newW.y = spec.y;
+      newW.w = spec.w;
+      newW.h = spec.h;
+      newW.colSpan = spec.w;
+      newW.rowSpan = spec.h;
+    } else if (deviceKey.value === "mobile") {
+      // If no mobile layout exists, reset position to force auto-layout in reading order
+      newW.x = undefined;
+      newW.y = undefined;
     }
-  },
+
+    // Safety: Ensure widget width does not exceed total columns
+    // This is critical when switching from wider to narrower layouts (e.g. desktop -> tablet)
+    if ((newW.w || 1) > colNum) newW.w = colNum;
+
+    if (deviceKey.value === "mobile") {
+      if (
+        [
+          "clockweather",
+          "calendar",
+          "rss",
+          "iframe",
+          "todo",
+          "memo",
+          "bookmarks",
+          "hot",
+        ].includes(newW.type)
+      ) {
+        newW.w = colNum;
+      }
+    }
+    return newW;
+  });
+
+  // 标记为程序化布局更新，避免触发保存循环
+  skipNextLayoutSave = true;
+  layoutData.value = compactVertical(generateLayout(widgetsToLayout, colNum));
+  
+  // 如果 deviceKey 发生变化，强制重新挂载 GridLayout 组件
+  // 这可以解决从窄屏切换回宽屏时布局错乱的问题，同时避免 :key 导致的死循环
+  if (shouldRemount && !isInternalUpdate && !isEditMode.value) {
+    isGridAlive.value = false;
+    nextTick(() => {
+      isGridAlive.value = true;
+    });
+  }
+};
+
+watch(
+  () => [store.mergedWidgets, widgetColNum.value, deviceKey.value],
+  () => rebuildLayout(),
   { deep: true, immediate: true },
+);
+
+// 登录态一变（登录 / 退出登录 / token 被服务端判为失效而清空）就按新的可见性重算一次。
+// 少了这一步，checkVisible 的过滤结果会一直停留在上一次算出来的样子：token 失效后
+// 页面明明已经是未登录，设为"不公开"的卡片却还留在卡片区里。
+watch(
+  () => store.isLogged,
+  (logged) => {
+    if (!logged) {
+      // 401 清 token 那条路不会经过退出按钮，编辑态得在这里一并收掉，
+      // 否则重建布局/编辑控件会停在半途。
+      isEditMode.value = false;
+      store.layoutEditInProgress = false;
+    }
+    rebuildLayout(true);
+  },
 );
 
 const handleLayoutUpdated = (newLayout: GridLayoutItem[]) => {

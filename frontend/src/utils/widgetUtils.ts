@@ -82,7 +82,12 @@ export function normalizeIncomingWidgets(
     : [];
 
   if (nextWidgets.length === 0) {
-    return createDefaultWidgetList(!!isLoggedIn);
+    // 访客（未登录）拿到空列表时**不要**凭空补一套默认组件：服务端已经把"公开可见"的
+    // 内容过滤过了，这里为空就代表访客确实没有可见内容（例如所有小组件都设成了不公开）。
+    // 以前这里会返回默认表，而默认表里 calculator 等项的 isPublic 是 true —— 于是
+    // "设置成不公开"的组件反而在未登录时冒出来（用户看到计算器就是这么来的）。
+    if (!isLoggedIn) return [];
+    return createDefaultWidgetList(true);
   }
 
   // Fix memo type
