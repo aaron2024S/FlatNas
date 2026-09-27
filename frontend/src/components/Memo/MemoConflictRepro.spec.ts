@@ -41,8 +41,18 @@ vi.mock('../../config', () => ({
 type FetchResponse = {
   ok: boolean;
   status?: number;
+  // 真实的 fetch Response 一定带 headers；parseJsonBody 会读 content-type，
+  // mock 漏掉这一项会让它直接抛 TypeError，被测保存逻辑根本走不到。
+  headers: Headers;
   json: () => Promise<unknown>;
 };
+
+const jsonResponse = (payload: unknown, status = 200): FetchResponse => ({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: new Headers({ 'content-type': 'application/json' }),
+  json: async () => payload
+});
 
 describe('MemoWidget Conflict Reproduction', () => {
   let wrapper: VueWrapper;
@@ -54,10 +64,9 @@ describe('MemoWidget Conflict Reproduction', () => {
     global.fetch = fetchMock;
 
     // Default fallback
-    (fetchMock as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ success: true, data: { content: '', server_ts: 0 } })
-    });
+    (fetchMock as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse({ success: true, data: { content: '', server_ts: 0 } })
+    );
   });
 
   afterEach(() => {
@@ -105,10 +114,7 @@ describe('MemoWidget Conflict Reproduction', () => {
         return secondFetchPromise;
       }
 
-      return {
-        ok: true,
-        json: async () => ({ success: true, data: { content: '', server_ts: 0 } })
-      };
+      return jsonResponse({ success: true, data: { content: '', server_ts: 0 } });
     });
 
     // 1. User types "A"
@@ -139,14 +145,9 @@ describe('MemoWidget Conflict Reproduction', () => {
     expect(callCount).toBe(1);
 
     // 5. Resolve first fetch
-    resolveFirstFetch!({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        success: true,
-        data: { content: 'initialA', server_ts: 101 }
-      })
-    });
+    resolveFirstFetch!(
+      jsonResponse({ success: true, data: { content: 'initialA', server_ts: 101 } })
+    );
 
     await flushPromises();
 
@@ -165,14 +166,9 @@ describe('MemoWidget Conflict Reproduction', () => {
     expect(secondBody.content).toBe('initialAB');
 
     // 6. Resolve second fetch
-    resolveSecondFetch!({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        success: true,
-        data: { content: 'initialAB', server_ts: 102 }
-      })
-    });
+    resolveSecondFetch!(
+      jsonResponse({ success: true, data: { content: 'initialAB', server_ts: 102 } })
+    );
 
     await flushPromises();
 

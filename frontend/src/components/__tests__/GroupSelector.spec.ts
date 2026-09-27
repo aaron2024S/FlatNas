@@ -16,8 +16,10 @@ describe('GroupSelector', () => {
         plugins: [
           createTestingPinia({
             createSpy: vi.fn,
+            // 注意：main store 的 groups 是从 groups store 派生的 computed getter，
+            // 往 main 里塞 initialState 不会生效。真正的 state 在 groups store 上。
             initialState: {
-              main: {
+              groups: {
                 groups: [
                   { id: 'group-1', title: 'Group 1', items: [] },
                   { id: 'group-2', title: 'Group 2', items: [] },

@@ -57,7 +57,11 @@ function isModuleScript(js: string): boolean {
   );
 }
 
-describe("win/组件 自定义组件", () => {
+// win/ 目录在 .gitignore 里（作者本机的自定义组件素材），克隆与 CI 环境都不存在。
+// 没有被测数据时应当跳过，而不是断言 0 >= 20 直接判失败。
+const HAS_WIN_COMPONENTS = fs.existsSync(WIN_COMPONENTS_DIR);
+
+describe.skipIf(!HAS_WIN_COMPONENTS)("win/组件 自定义组件", () => {
   const componentDirs = loadComponentDirs();
 
   it("应至少存在 20 个组件目录", () => {

@@ -36,7 +36,14 @@ vi.mock('../utils/gridLayout', () => ({
 }));
 vi.mock('@/utils/network', () => ({
   isInternalNetwork: () => false,
-  getNetworkConfig: () => ({})
+  getNetworkConfig: () => ({}),
+  // GridPanel 还 import 了它；漏掉会在 mount 时抛
+  // 「No "computeEffectiveNetworkMode" export is defined on the mock」
+  computeEffectiveNetworkMode: () => ({
+    isLan: false,
+    reason: 'mocked',
+    measuredLatencyMs: 0
+  })
 }));
 
 describe('GridPanel Context Menu', () => {
@@ -50,9 +57,12 @@ describe('GridPanel Context Menu', () => {
         plugins: [
           createTestingPinia({
             createSpy: () => vi.fn().mockResolvedValue(undefined),
+            // 注意：main store 的 widgets / isLogged / groups 都是从子 store 派生的
+            // computed getter，往 main 里塞 initialState 不会生效 —— 必须设到真正的
+            // 子 store（widgets / auth）上，否则组件里一个 widget 都渲染不出来。
             initialState: {
-              main: {
-                isLogged: true,
+              auth: { token: 'test-token' },
+              widgets: {
                 widgets: [
                   {
                     id: 'div-card-1',
@@ -62,14 +72,19 @@ describe('GridPanel Context Menu', () => {
                     enable: true,
                     isPublic: true
                   }
-                ],
-                groups: [],
-                appConfig: {}
+                ]
               }
             }
           })
         ],
         stubs: {
+          // OverlayMotion 内部是 <Teleport to="body">，会把菜单送出组件树，
+          // wrapper.find 就搜不到 [data-grid-context-menu] 了。
+          // stub 成普通 div，保留 show 语义与插槽内容。
+          OverlayMotion: {
+            props: ['show', 'zIndex', 'variant', 'panelClass', 'panelStyle'],
+            template: '<div v-if="show" class="overlay-motion-stub"><slot /></div>'
+          },
           ClockWidget: true,
           SimpleWeatherWidget: true,
           CalendarWidget: true,
