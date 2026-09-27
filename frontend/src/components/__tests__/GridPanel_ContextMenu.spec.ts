@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { defineComponent, nextTick } from 'vue';
 import { mount, VueWrapper } from '@vue/test-utils';
 import GridPanel from '../GridPanel.vue';
 import { createTestingPinia } from '@pinia/testing';
@@ -46,6 +47,76 @@ vi.mock('@/utils/network', () => ({
   })
 }));
 
+/**
+ * OverlayMotion 真实实现是 <Teleport to="body"> + Transition，会把菜单送出组件树，
+ * wrapper.find 就搜不到了。这里保留它真正的 DOM 层次（外层容器 + 定位面板），
+ * 只是不用 Teleport —— 这样测试才能断言「菜单最终落在了哪里」。
+ */
+const OverlayMotionStub = defineComponent({
+  name: 'OverlayMotion',
+  props: ['show', 'zIndex', 'variant', 'panelClass', 'panelStyle'],
+  template: `
+    <div v-if="show" class="overlay-motion-root">
+      <div class="overlay-motion-panel" :style="panelStyle"><slot /></div>
+    </div>
+  `
+});
+
+// jsdom 里没有布局引擎：offsetWidth/offsetHeight 恒为 0，window 也没有真实尺寸。
+// 想验证「菜单有没有翻到上面」，就得把这两个数显式给出来。
+type Layout = {
+  viewportWidth: number;
+  viewportHeight: number;
+  panelWidth: number;
+  panelHeight: number;
+};
+
+const originalDescriptors: Record<string, PropertyDescriptor | undefined> = {};
+
+const stubLayout = (layout: Layout) => {
+  vi.stubGlobal('innerWidth', layout.viewportWidth);
+  vi.stubGlobal('innerHeight', layout.viewportHeight);
+
+  const read = (el: Element, axis: 'Width' | 'Height') =>
+    el.classList?.contains('overlay-motion-panel')
+      ? axis === 'Width'
+        ? layout.panelWidth
+        : layout.panelHeight
+      : 0;
+
+  (['offsetWidth', 'offsetHeight'] as const).forEach((key) => {
+    originalDescriptors[key] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key);
+    Object.defineProperty(HTMLElement.prototype, key, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return read(this, key === 'offsetWidth' ? 'Width' : 'Height');
+      }
+    });
+  });
+
+  // @vueuse 的 useWindowSize 只在 resize 时重读窗口尺寸，mount 之后再改要手动触发一次
+  window.dispatchEvent(new Event('resize'));
+};
+
+const restoreLayout = () => {
+  vi.unstubAllGlobals();
+  (['offsetWidth', 'offsetHeight'] as const).forEach((key) => {
+    const original = originalDescriptors[key];
+    if (original) Object.defineProperty(HTMLElement.prototype, key, original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+  });
+};
+
+const panelStyle = (wrapper: VueWrapper) =>
+  wrapper.find('.overlay-motion-panel').attributes('style') || '';
+
+/** 从内联样式里取出数值：style="top: 372px; left: 300px; ..." */
+const styleValue = (style: string, prop: string) => {
+  const matched = style.match(new RegExp(`${prop}:\\s*(-?[\\d.]+)px`));
+  if (!matched) throw new Error(`样式里没有 ${prop}：${style}`);
+  return Number(matched[1]);
+};
+
 describe('GridPanel Context Menu', () => {
   let wrapper: VueWrapper;
 
@@ -78,13 +149,7 @@ describe('GridPanel Context Menu', () => {
           })
         ],
         stubs: {
-          // OverlayMotion 内部是 <Teleport to="body">，会把菜单送出组件树，
-          // wrapper.find 就搜不到 [data-grid-context-menu] 了。
-          // stub 成普通 div，保留 show 语义与插槽内容。
-          OverlayMotion: {
-            props: ['show', 'zIndex', 'variant', 'panelClass', 'panelStyle'],
-            template: '<div v-if="show" class="overlay-motion-stub"><slot /></div>'
-          },
+          OverlayMotion: OverlayMotionStub,
           ClockWidget: true,
           SimpleWeatherWidget: true,
           CalendarWidget: true,
@@ -116,6 +181,10 @@ describe('GridPanel Context Menu', () => {
       }
     });
     // store = useMainStore();
+  });
+
+  afterEach(() => {
+    restoreLayout();
   });
 
   it('renders div-card widget correctly', () => {
@@ -156,5 +225,81 @@ describe('GridPanel Context Menu', () => {
 
     // Check if delete confirm modal is shown
     expect(wrapper.text()).toContain('删除确认');
+  });
+
+  // —— 以下三例对应「卡片贴着屏幕下沿时菜单被切掉」这个问题 ——
+  // 六项菜单实测约 160×216；原来的实现按 150×100 估算、且不做夹取，
+  // 于是 600px 高的视口里点击 y=588 会把菜单放到 588，底边 588+216=804 直接出屏。
+  describe('贴边定位', () => {
+    const openAt = async (clientX: number, clientY: number) => {
+      const divCard = wrapper.find('.div-card-click-target');
+      await divCard.trigger('contextmenu', { clientX, clientY });
+      // 位置是"渲染后实测尺寸 → 重算"两拍，等第二拍落定
+      await nextTick();
+      await nextTick();
+    };
+
+    it('下方放不下时翻到点击点上方，菜单完整落在视口内', async () => {
+      const viewport = { viewportWidth: 1200, viewportHeight: 600 };
+      const panel = { panelWidth: 160, panelHeight: 216 };
+      stubLayout({ ...viewport, ...panel });
+
+      await openAt(300, 588);
+
+      const style = panelStyle(wrapper);
+      const top = styleValue(style, 'top');
+      const left = styleValue(style, 'left');
+
+      // 向上翻：底边正好压在点击点上
+      expect(top).toBe(588 - panel.panelHeight);
+      expect(left).toBe(300);
+      // 关键断言：整个菜单在视口内（含 8px 安全间距）
+      expect(top).toBeGreaterThanOrEqual(8);
+      expect(top + panel.panelHeight).toBeLessThanOrEqual(
+        viewport.viewportHeight - 8
+      );
+      // 顺带说清原来的 bug：旧算法（top=588）会让菜单底部溢出视口 212px
+      expect(588 + panel.panelHeight).toBeGreaterThan(viewport.viewportHeight - 8);
+    });
+
+    it('菜单比视口还高时夹进视口，并让菜单内部滚动', async () => {
+      const viewport = { viewportWidth: 1200, viewportHeight: 300 };
+      const panel = { panelWidth: 160, panelHeight: 600 };
+      stubLayout({ ...viewport, ...panel });
+
+      await openAt(200, 290);
+
+      const style = panelStyle(wrapper);
+      const top = styleValue(style, 'top');
+      const maxHeight = styleValue(style, 'max-height');
+
+      expect(top).toBe(8);
+      expect(maxHeight).toBe(viewport.viewportHeight - 16);
+      expect(style).toContain('overflow-y: auto');
+      expect(top + maxHeight).toBeLessThanOrEqual(viewport.viewportHeight - 8);
+    });
+
+    it('靠右下角时同时向左上翻，且空间充足时仍是向下弹出', async () => {
+      stubLayout({
+        viewportWidth: 1200,
+        viewportHeight: 600,
+        panelWidth: 160,
+        panelHeight: 216
+      });
+
+      // 空间充足：行为与改动前一致（贴着点击点往右下）
+      await openAt(200, 120);
+      let style = panelStyle(wrapper);
+      expect(styleValue(style, 'top')).toBe(120);
+      expect(styleValue(style, 'left')).toBe(200);
+
+      // 右下角：两个方向都翻
+      await openAt(1180, 588);
+      style = panelStyle(wrapper);
+      expect(styleValue(style, 'left')).toBe(1180 - 160);
+      expect(styleValue(style, 'top')).toBe(588 - 216);
+      expect(styleValue(style, 'left') + 160).toBeLessThanOrEqual(1200 - 8);
+      expect(styleValue(style, 'top') + 216).toBeLessThanOrEqual(600 - 8);
+    });
   });
 });

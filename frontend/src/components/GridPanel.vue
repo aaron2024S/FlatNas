@@ -22,6 +22,7 @@ import { generateLayout, type GridLayoutItem } from "../utils/gridLayout";
 import type { NavItem, WidgetConfig, NavGroup } from "@/types";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
 import { isInternalNetwork, getNetworkConfig, computeEffectiveNetworkMode } from "@/utils/network";
+import { computeMenuPlacement } from "@/utils/menuPosition";
 import DOMPurify from "dompurify";
 const CHUNK_RELOAD_KEY = "flatnas:chunk-reload-at";
 const loadAsync = <T extends Component>(loader: AsyncComponentLoader<T>) =>
@@ -2203,27 +2204,114 @@ const openBackupUrl = (url: string | { url: string }) => {
 
 // --- Context Menu Logic ---
 const showContextMenu = ref(false);
-const contextMenuPosition = ref({ x: 0, y: 0 });
 const contextMenuItem = ref<NavItem | null>(null);
 const contextMenuGroupId = ref<string | undefined>(undefined);
+const contextMenuRef = ref<HTMLElement | null>(null);
+/** 点击点（视口坐标）：右键与长按都落到这里，渲染后由它换算出最终位置 */
+const contextMenuAnchor = ref({ x: 0, y: 0 });
+/**
+ * 菜单渲染后的实测尺寸。菜单项数量是随卡片变的（是否 Docker 卡片、有几个备用
+ * 地址、是否有外网地址），所以这里一律实测 —— 原来写死的 150×100 在六项菜单
+ * 上差了一倍多，靠近屏幕下沿时底部几项会伸到视口外。
+ */
+const contextMenuSize = ref({ width: 0, height: 0 });
+let contextMenuObserver: ResizeObserver | null = null;
 let ignoreNextNativeContextMenu = false;
+
+// 量不到真实尺寸时的兜底（jsdom 测试、极端首帧）：宽度取面板的 min-w，
+// 高度取一个偏小的保守值 —— 宁可少翻一次，也不能把菜单放到视口外。
+const CONTEXT_MENU_FALLBACK_SIZE = { width: 160, height: 120 };
+
+const contextMenuPlacement = computed(() =>
+  computeMenuPlacement({
+    anchorX: contextMenuAnchor.value.x,
+    anchorY: contextMenuAnchor.value.y,
+    width: contextMenuSize.value.width || CONTEXT_MENU_FALLBACK_SIZE.width,
+    height: contextMenuSize.value.height || CONTEXT_MENU_FALLBACK_SIZE.height,
+    // 视口尺寸取 useWindowSize 的响应式值：窗口一改（旋转 / 拉伸）菜单自动重算
+    viewportWidth: width.value || 1024,
+    viewportHeight: height.value || 768,
+  }),
+);
+
+const contextMenuMeasured = computed(
+  () => contextMenuSize.value.width > 0 && contextMenuSize.value.height > 0,
+);
+
+const contextMenuStyle = computed(() => {
+  const p = contextMenuPlacement.value;
+  const style: Record<string, string> = {
+    top: `${p.top}px`,
+    left: `${p.left}px`,
+  };
+  // 没量到尺寸就不下 max-* 限制，免得把内容裁掉
+  if (contextMenuMeasured.value) {
+    style.maxWidth = `${p.maxWidth}px`;
+    style.maxHeight = `${p.maxHeight}px`;
+    style.overflowY = p.scrollableY ? "auto" : "hidden";
+  }
+  return style;
+});
+
+/** 菜单挂在 OverlayMotion 的 .overlay-motion-panel 上，我们自己的内容还能再包一层 */
+const contextMenuPanelEl = (): HTMLElement | null => {
+  const el = contextMenuRef.value;
+  if (!el) return null;
+  return (
+    (el.closest?.(".overlay-motion-panel") as HTMLElement | null) ||
+    el.parentElement ||
+    el
+  );
+};
+
+const applyContextMenuSize = (w: number, h: number) => {
+  if (contextMenuSize.value.width === w && contextMenuSize.value.height === h) return;
+  contextMenuSize.value = { width: w, height: h };
+};
+
+/**
+ * 菜单开着的时候还可能长高长矮：Docker 容器状态是异步轮询回来的，拿到
+ * 「有更新」之后会多出一项「升级镜像」。所以量到尺寸之后要跟着变化重新定位，
+ * 否则菜单又会长出视口。相等的尺寸直接跳过，避免"重定位 → 重排 → 再回调"打转。
+ */
+const observeContextMenuSize = (panel: HTMLElement) => {
+  if (typeof ResizeObserver === "undefined") return;
+  contextMenuObserver?.disconnect();
+  contextMenuObserver = new ResizeObserver(() => {
+    if (!showContextMenu.value) return;
+    applyContextMenuSize(panel.offsetWidth, panel.offsetHeight);
+  });
+  contextMenuObserver.observe(panel);
+};
+
+const stopObservingContextMenu = () => {
+  contextMenuObserver?.disconnect();
+  contextMenuObserver = null;
+};
+
+/**
+ * 先渲染、后定位：尺寸只能实测，所以等 DOM 到位再算。这一步仍在同一个渲染帧内
+ * 完成（nextTick 是微任务，浏览器不会在微任务之间绘制），看不到中间态。
+ */
+const positionContextMenu = () => {
+  const panel = contextMenuPanelEl();
+  if (!panel) return;
+  applyContextMenuSize(panel.offsetWidth, panel.offsetHeight);
+  observeContextMenuSize(panel);
+};
 
 const openContextMenuAt = (x: number, y: number, item: NavItem, groupId?: string) => {
   if (!store.isLogged) return;
   contextMenuItem.value = item;
   contextMenuGroupId.value = groupId;
-
-  // Prevent menu from going off-screen (basic logic)
-  const menuWidth = 150;
-  const menuHeight = 100;
-  let finalX = x;
-  let finalY = y;
-
-  if (finalX + menuWidth > window.innerWidth) finalX -= menuWidth;
-  if (finalY + menuHeight > window.innerHeight) finalY -= menuHeight;
-
-  contextMenuPosition.value = { x: finalX, y: finalY };
+  contextMenuAnchor.value = { x, y };
+  // 上一轮量到的尺寸不一定适用于这一份菜单（比如从两项变成七项）
+  stopObservingContextMenu();
+  contextMenuSize.value = { width: 0, height: 0 };
   showContextMenu.value = true;
+  nextTick(() => {
+    if (showContextMenu.value) positionContextMenu();
+  });
 };
 
 const openContextMenu = (e: MouseEvent, item: NavItem, groupId?: string) => {
@@ -2375,6 +2463,7 @@ const handleContextMenuPointerDown = (e: MouseEvent, item: NavItem, groupId?: st
 
 const closeContextMenu = () => {
   showContextMenu.value = false;
+  stopObservingContextMenu();
 };
 
 const onDocPointerDownCapture = (e: PointerEvent) => {
@@ -4345,7 +4434,7 @@ onUnmounted(() => {
       :z-index="50"
       variant="context-menu"
       panel-class="fixed bg-white rounded-lg shadow-xl border border-gray-200 py-1 min-w-[160px] overflow-hidden"
-      :panel-style="{ top: contextMenuPosition.y + 'px', left: contextMenuPosition.x + 'px' }"
+      :panel-style="contextMenuStyle"
     >
     <div
       ref="contextMenuRef"
