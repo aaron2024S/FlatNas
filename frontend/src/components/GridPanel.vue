@@ -3818,19 +3818,18 @@ onUnmounted(() => {
                 <span class="text-2xl font-mono opacity-60">{{ displayIp }}</span>
               </div>
 
-              <div class="flex items-center justify-center gap-2 w-full flex-1">
-                <span class="text-[12px] opacity-70 uppercase">PING测试</span>
-                <div
-                  class="text-base font-mono font-medium text-white/90 bg-white/20 backdrop-blur-sm border border-white/20 px-2 py-0.5 rounded"
-                >
-                  {{ ipInfo.baiduLatency }}
-                </div>
+              <div class="flex items-center justify-center gap-2 w-full min-w-0 flex-1">
                 <button
-                  @click="fetchIp(true)"
-                  class="text-[12px] text-white/80 bg-white/20 px-2.5 py-0.5 rounded hover:bg-white/30 transition-colors"
+                  type="button"
+                  class="shrink-0 whitespace-nowrap cursor-pointer text-[12px] uppercase opacity-70 transition-opacity hover:opacity-100"
+                  title="点击刷新"
+                  @click.stop="fetchIp(true)"
                 >
-                  刷新
+                  PING测试
                 </button>
+                <span class="min-w-0 truncate text-base font-mono font-medium text-white/90">
+                  {{ ipInfo.baiduLatency }}
+                </span>
               </div>
 
               <div

@@ -6,14 +6,20 @@ import { fitIpAddress } from "@/utils/ipAddressFit";
 /**
  * 一行「标签 + 地址」。
  *
- * 两条硬约束，缺一个就会退化成之前那个样子：
+ * 三条硬约束，缺一个就会退化成之前那个样子：
  *   - 标签必须 shrink-0 + whitespace-nowrap，否则长地址会把它挤成竖排；
- *   - 地址必须 whitespace-nowrap + overflow-hidden，否则会在字符中间被撕成两行。
+ *   - 地址必须 whitespace-nowrap + overflow-hidden，否则会在字符中间被撕成两行；
+ *   - 地址必须按**内容宽度**收窄、与标签一起居中，不能 flex-1 撑满剩余宽度 ——
+ *     否则「外网」会被顶到行首、地址在剩下那一大块里居中，卡片一拖宽两者就隔得很远。
  *
- * 地址占满剩余宽度（flex-1），既保证点击区域是整行、也让我们能直接量到可用宽度，
- * 字号与省略交给 fitIpAddress 决定。字号变化不会反过来改变自身宽度（宽度由父级决定），
- * 所以不存在「测量 → 改字号 → 宽度变化 → 再测量」的循环。
+ * 代价是可用宽度不能再直接量地址元素：地址宽度＝它自己的内容宽度，
+ * 量出来是「结果」而不是「约束」，会自激。所以改成量整行宽度与标签宽度相减。
+ * 标签宽度只由字号决定（字号是 props，不由宽度反推），因此不存在测量循环。
  */
+
+/** 标签与地址之间的间距。写死像素而非 gap-2，免得 rem 基准变化时和估算对不上 */
+const LABEL_GAP_PX = 8;
+
 const props = withDefaults(
   defineProps<{
     label: string;
@@ -39,15 +45,29 @@ const emit = defineEmits<{
   (e: "copy", value: string): void;
 }>();
 
-const addrEl = ref<HTMLElement | null>(null);
-const availableWidth = ref(0);
+const rowEl = ref<HTMLElement | null>(null);
+const labelEl = ref<HTMLElement | null>(null);
+const rowWidth = ref(0);
+const labelWidth = ref(0);
 
-useResizeObserver(addrEl, (entries) => {
+useResizeObserver(rowEl, (entries) => {
   const width = entries[0]?.contentRect?.width ?? 0;
-  if (width > 0 && Math.abs(width - availableWidth.value) > 0.5) {
-    availableWidth.value = width;
+  if (width > 0 && Math.abs(width - rowWidth.value) > 0.5) {
+    rowWidth.value = width;
   }
 });
+
+useResizeObserver(labelEl, (entries) => {
+  const width = entries[0]?.contentRect?.width ?? 0;
+  if (width > 0 && Math.abs(width - labelWidth.value) > 0.5) {
+    labelWidth.value = width;
+  }
+});
+
+/** 留给地址的宽度 = 整行 − 标签 − 间距 */
+const availableWidth = computed(() =>
+  Math.max(0, rowWidth.value - labelWidth.value - LABEL_GAP_PX),
+);
 
 const fit = computed(() =>
   fitIpAddress({
@@ -60,23 +80,27 @@ const fit = computed(() =>
 </script>
 
 <template>
-  <div class="flex w-full min-w-0 items-center justify-center gap-2">
+  <!-- 整行都是点击区：地址收窄后按钮本身变小，把复制动作挂在行上才不至于难点 -->
+  <div
+    ref="rowEl"
+    class="ip-address-line flex w-full min-w-0 cursor-pointer items-center justify-center"
+    :style="{ gap: `${LABEL_GAP_PX}px` }"
+    :title="`点击复制${label} IP：${value}`"
+    @click.stop="emit('copy', value)"
+  >
     <span
+      ref="labelEl"
       class="shrink-0 whitespace-nowrap uppercase opacity-70"
       :style="{ fontSize: `${labelFontSize}px` }"
     >
       {{ label }}
     </span>
-    <button
-      ref="addrEl"
-      type="button"
-      class="ip-address-value min-w-0 flex-1 overflow-hidden whitespace-nowrap text-center font-mono font-medium leading-tight select-text transition-opacity hover:opacity-90"
+    <span
+      class="ip-address-value min-w-0 overflow-hidden whitespace-nowrap font-mono font-medium leading-tight select-text transition-opacity hover:opacity-90"
       :class="muted ? 'opacity-70' : ''"
       :style="{ fontSize: `${fit.fontSize}px` }"
-      :title="`点击复制${label} IP：${value}`"
-      @click.stop="emit('copy', value)"
     >
       {{ fit.display }}
-    </button>
+    </span>
   </div>
 </template>
