@@ -8,10 +8,14 @@
  * 点不到也看不见。
  *
  * 这里的规则（尺寸一律用实测值，不用常数）：
- *   1) 下方放得下 → 贴着点击点往下弹（默认行为，保持不变）；
- *   2) 下方放不下、上方放得下 → 翻到点击点上方（菜单左下角贴着光标）；
- *   3) 上下都放不下（菜单比视口还高）→ 夹进视口，并让菜单自己内部滚动；
- *   4) 水平方向同理：右侧放不下就翻到左侧，再不行就夹住。
+ *   1) 优先方向放得下 → 就按优先方向贴住锚点（preferY/preferX 决定，默认「下 + 右」）；
+ *   2) 优先方向放不下、对面放得下 → 翻到对面；
+ *   3) 两边都放不下（面板比视口还高/宽）→ 夹进视口，并让面板自己内部滚动。
+ *
+ * 两种锚点偏好：
+ *   - 右键菜单：贴光标往下/往右弹（preferY="below"、preferX="right"，默认）；
+ *   - 卡片「调整尺寸」面板（SizeSelector）：挂在卡片的把手**上方**、右边缘对齐把手，
+ *     所以用 preferY="above"、preferX="left"，配 gap 留出与把手的间距。
  *
  * 纯函数，不碰 DOM，方便单测；量尺寸与写样式由调用方负责。
  */
@@ -31,6 +35,23 @@ export interface MenuPlacementInput {
   viewportHeight: number;
   /** 安全间距，默认 MENU_EDGE */
   edge?: number;
+  /** 面板与锚点之间额外留的间隙，默认 0（右键菜单就是贴着光标） */
+  gap?: number;
+  /**
+   * 垂直优先方向。below（默认）：面板顶边贴锚点往下弹；
+   * above：面板底边贴锚点往上弹（尺寸面板挂在把手正上方就是这种）。
+   */
+  preferY?: "below" | "above";
+  /**
+   * 水平优先方向。right（默认）：面板左边贴锚点往右弹；
+   * left：面板右边贴锚点往左弹。
+   */
+  preferX?: "right" | "left";
+  /**
+   * 翻到「对面」时改用这个纵坐标当锚点。默认沿用 anchorY。
+   * 尺寸面板翻到下方时传把手的**下沿**，面板才不会压住把手本身。
+   */
+  flipAnchorY?: number;
 }
 
 export interface MenuPlacement {
@@ -53,6 +74,9 @@ const clamp = (value: number, min: number, max: number) =>
 
 export function computeMenuPlacement(input: MenuPlacementInput): MenuPlacement {
   const edge = input.edge ?? MENU_EDGE;
+  const gap = input.gap ?? 0;
+  const preferY = input.preferY ?? "below";
+  const preferX = input.preferX ?? "right";
   const vw = Math.max(0, input.viewportWidth);
   const vh = Math.max(0, input.viewportHeight);
   // 视口里真正可用的区域（四边各留 edge 的呼吸位）
@@ -64,21 +88,41 @@ export function computeMenuPlacement(input: MenuPlacementInput): MenuPlacement {
   const width = Math.min(naturalW, usableW);
   const height = Math.min(naturalH, usableH);
 
-  // ---- 垂直：优先向下，其次向上，都不行就夹住 ----
-  let top = input.anchorY;
+  // ---- 垂直：按优先方向贴锚点，放不下就翻到对面，都不行就夹住 ----
+  const flipAnchorY = input.flipAnchorY ?? input.anchorY;
+  let top: number;
   let flippedY = false;
-  if (input.anchorY + height + edge > vh && input.anchorY - height >= edge) {
-    top = input.anchorY - height;
-    flippedY = true;
+  if (preferY === "above") {
+    top = input.anchorY - height - gap;
+    // 上方放不下 → 翻到锚点下方（只在下方确实塞得下时才翻，否则交给夹取）
+    if (top < edge && flipAnchorY + gap + height <= vh - edge) {
+      top = flipAnchorY + gap;
+      flippedY = true;
+    }
+  } else {
+    top = input.anchorY + gap;
+    if (top + height + edge > vh && flipAnchorY - gap - height >= edge) {
+      top = flipAnchorY - gap - height;
+      flippedY = true;
+    }
   }
   top = clamp(top, edge, vh - height - edge);
 
-  // ---- 水平：优先向右，其次向左，都不行就夹住 ----
-  let left = input.anchorX;
+  // ---- 水平：同理，向右贴不上就翻到左，再不行就夹住 ----
+  let left: number;
   let flippedX = false;
-  if (input.anchorX + width + edge > vw && input.anchorX - width >= edge) {
+  if (preferX === "left") {
     left = input.anchorX - width;
-    flippedX = true;
+    if (left < edge && input.anchorX + width <= vw - edge) {
+      left = input.anchorX;
+      flippedX = true;
+    }
+  } else {
+    left = input.anchorX;
+    if (left + width + edge > vw && input.anchorX - width >= edge) {
+      left = input.anchorX - width;
+      flippedX = true;
+    }
   }
   left = clamp(left, edge, vw - width - edge);
 
