@@ -291,7 +291,9 @@ func main() {
 		api.GET("/docker-status", handlers.GetDockerStatus)                                        // Added Docker Status
 		api.GET("/docker/debug", handlers.GetDockerDebug)
 		api.GET("/config/proxy-status", handlers.GetProxyStatus)
-		api.GET("/widgets/:id", handlers.GetWidget) // Added Widget Data
+		// GET widgets 必须鉴权：此前挂在公开路由上，handler 对未登录请求回退成
+		// admin 并读取其数据（多用户下待办轮询会读到 admin 的数据）。
+		api.GET("/widgets/:id", middleware.AuthMiddleware(), handlers.GetWidget) // Added Widget Data
 		api.GET("/memo/:id", middleware.AuthMiddleware(), handlers.GetMemo)
 
 		// Icon Routes

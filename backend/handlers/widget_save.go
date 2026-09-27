@@ -38,6 +38,12 @@ func SaveSingleWidget(c *gin.Context) {
 		userFile = filepath.Join(config.DataDir, "data.json")
 	}
 
+	// 读-改-写全程持该用户数据文件的锁，与 SaveData / ResetData 互斥，
+	// 避免并发保存互相丢更新。
+	userFileLock := lockUserDataFile(userFile)
+	userFileLock.Lock()
+	defer userFileLock.Unlock()
+
 	var userData map[string]interface{}
 	if err := utils.ReadJSON(userFile, &userData); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User data not found"})

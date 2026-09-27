@@ -51,6 +51,11 @@ const lastInputAt = ref(0);
 const isBroadcasting = ref(false);
 const isPageVisible = ref(document.visibilityState === "visible");
 
+// 初始化期间抑制自动保存：初始化/远端同步引起的 localData 变化不是用户意图，
+// 不应该回推服务端（否则会把 IDB 旧内容或竞态结果写回云端）。
+// 由 handleInputActivity（用户真实输入）置为 false，之后恢复正常自动保存。
+let suppressAutoSave = true;
+
 // Persistence
 const { saveToIndexedDB, loadFromIndexedDB, status, saveVersionSnapshot, loadVersions, deleteVersion } =
   useMemoPersistence(
@@ -364,31 +369,9 @@ const saveToServer = async (immediate = false, keepalive = false) => {
           return;
         }
 
-        if (remoteParsed.serverTs) {
-          serverTs.value = remoteParsed.serverTs;
-          const retryPayload = buildPayload();
-          const retryRequestID = createSaveRequestID(id, retryPayload);
-          const retryRes = await requestMemoSave(id, retryPayload, keepalive, retryRequestID);
-          const retryParsedBody = await parseJsonBody(retryRes);
-          const retryData = retryParsedBody.isJson
-            ? (retryParsedBody.data as { data?: WidgetConfig["data"] } | null)
-            : null;
-          if (retryRes.ok && retryParsedBody.isJson) {
-            if (retryData?.data) {
-              applyRemotePayload(retryData.data);
-            }
-            conflictState.value = { hasConflict: false, remoteData: null };
-            syncState.value = "idle";
-            showToast.value = false;
-            saveRetryCount = 0;
-            return;
-          }
-          if (!retryParsedBody.isJson) {
-            markSaveError("保存失败：服务返回异常页面");
-            return;
-          }
-        }
-
+        // 内容确实不同：不再"带上服务端 server_ts 自动重试"——那等于用本地
+        // 旧内容静默盖掉服务端更新，冲突提示形同虚设。改为直接进入冲突流程，
+        // 由用户选择保留本地（覆盖云端）还是使用云端（放弃本地）。
         const signature = buildConflictSignature(
           remoteParsed.content,
           remoteParsed.serverTs,
@@ -721,6 +704,10 @@ const handleBlur = () => {
 };
 
 const handleInputActivity = () => {
+  // 用户真实输入是"初始化抑制"的解除点：只有从这里开始，localData 的变化
+  // 才是用户意图，才允许被 [localData, mode] 的 watch 自动保存回服务端。
+  // 简单/富文本两种模式都绑了 @input，一处即可覆盖。
+  suppressAutoSave = false;
   lastInputAt.value = Date.now();
   handleUserActivity(); // Also trigger activity
   updateSyncMode();
@@ -866,17 +853,37 @@ const handleBeforeUnload = () => {
 };
 
 // Initial Load
-loadFromIndexedDB().then(async () => {
-  if (!localData.value && props.widget.data) {
-     if (typeof props.widget.data === "string") {
-        localData.value = props.widget.data;
-     } else {
-        const d = props.widget.data as { rich?: string; simple?: string; mode?: "simple" | "rich"; server_ts?: number; updatedAt?: number };
-        localData.value = d.rich || d.simple || "";
-        mode.value = d.mode || "simple";
-        serverTs.value = typeof d.server_ts === "number" ? d.server_ts : (typeof d.updatedAt === "number" ? d.updatedAt : 0);
-     }
+// 初始化原则：服务端数据优先，IndexedDB 只做"离线兜底"。
+// 旧逻辑无条件把 IDB 内容写进 localData，随后 [localData, mode] 的 watch
+// 自动 saveToServer() → 打开页面就把旧备忘（含别处已删的）推回服务端；
+// 与 props.widget.data 的到达顺序还构成竞态。这里统一收敛为：
+// 在线且已登录时服务端是唯一权威；只有未登录/离线才用 IDB 内容展示。
+
+// 服务端数据（GetData 已把 memo widget 与 memo_*.json 对齐）作为基线
+const applyWidgetDataAsBaseline = (payload: unknown): boolean => {
+  if (!payload) return false;
+  const parsed = parsePayload(payload);
+  const hasServerInfo = parsed.content !== "" || parsed.serverTs > 0 || parsed.mode !== "";
+  if (!hasServerInfo) return false;
+  localData.value = parsed.content;
+  if (parsed.mode === "simple" || parsed.mode === "rich") {
+    mode.value = parsed.mode;
   }
+  serverTs.value = parsed.serverTs;
+  return true;
+};
+
+loadFromIndexedDB().then(async () => {
+  if (applyWidgetDataAsBaseline(props.widget.data)) {
+    // 服务端数据已作为基线，IDB 旧内容被覆盖；
+    // suppressAutoSave 保持到用户真正输入，避免初始化引发回写。
+  } else if (store.isLogged && navigator.onLine) {
+    // 在线但服务端数据未到或明确为空：等待 props watch / pollRemote 同步，
+    // 服务端"空"也是权威结果——丢弃 IDB 旧内容，防止被自动保存推回服务端。
+    localData.value = "";
+    serverTs.value = 0;
+  }
+  // 未登录 / 离线：保留 IDB 内容作离线兜底展示。
   await refreshVersions();
 });
 
@@ -888,7 +895,11 @@ watch([localData, mode], () => {
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     saveToIndexedDB();
-    saveToServer();
+    // 初始化/远端同步引发的变化不自动回推服务端（suppressAutoSave），
+    // 只有用户输入后的改动才走自动保存。
+    if (!suppressAutoSave) {
+      saveToServer();
+    }
   }, autoSaveDelay.value);
 });
 

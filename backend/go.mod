@@ -11,6 +11,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/googollee/go-socket.io v1.7.0
+	github.com/gorilla/websocket v1.4.2
 	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/crypto v0.47.0
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410
@@ -43,7 +44,6 @@ require (
 	github.com/gofrs/uuid v4.0.0+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/gomodule/redigo v1.8.4 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect

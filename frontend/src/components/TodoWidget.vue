@@ -43,6 +43,20 @@ const normalizeTodoItems = (value: unknown): TodoItem[] => {
 
 const todoItems = computed(() => normalizeTodoItems(props.widget.data));
 
+// 勾选必须写回 props.widget.data 的原始条目。
+// todoItems 是 normalizeTodoItems 的副本，v-model 改的是副本、永远写不回
+// widget.data（也就永远到不了服务端）——这是勾选状态丢失的直接原因。
+// 这里按 id（兜底下标）找到原始数组里的对应条目原地翻转。
+const toggleDone = (id: string, idx: number) => {
+  const raw = props.widget.data;
+  if (!Array.isArray(raw)) return;
+  const items = raw.filter((x): x is TodoItem => !!x && typeof x === "object");
+  const target = items.find((x) => x.id === id) ?? items[idx];
+  if (!target) return;
+  target.done = !target.done;
+  handleSave();
+};
+
 const stopPolling = () => {
   if (pollTimer) {
     clearTimeout(pollTimer);
@@ -68,15 +82,17 @@ const pollRemote = async (force = false) => {
     stopPolling();
     return;
   }
-  if (!force) {
-    if (saveStatus.value !== "saved") {
-      scheduleNextPoll();
-      return;
-    }
-    if (Date.now() - lastLocalMutationAt < TODO_LOCAL_CHANGE_GRACE_MS) {
-      scheduleNextPoll();
-      return;
-    }
+  // 本地有未落盘的改动时，远端绝不允许覆盖。
+  // force（切回标签页/恢复网络/登录）只用于跳过 socket 分支，
+  // 这两道保护对 force 同样生效，否则刚删除/勾选、还没保存成功的
+  // 条目会被服务端旧数据整体覆盖回来。
+  if (saveStatus.value !== "saved") {
+    scheduleNextPoll();
+    return;
+  }
+  if (Date.now() - lastLocalMutationAt < TODO_LOCAL_CHANGE_GRACE_MS) {
+    scheduleNextPoll();
+    return;
   }
 
   pollController?.abort();
@@ -121,6 +137,22 @@ const pushUpdate = useDebounceFn(() => {
   });
 }, 100);
 
+// 保存失败时保留 unsaved 状态并退避重试——只有确认落盘后才回到 saved，
+// 这样 pollRemote 的"未落盘不覆盖"保护才真正闭环（否则失败也被标成 saved）。
+let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let saveRetryCount = 0;
+const scheduleSaveRetry = () => {
+  if (saveRetryTimer) return;
+  saveRetryCount++;
+  const delay = Math.min(3000 * saveRetryCount, 30000);
+  saveRetryTimer = setTimeout(() => {
+    saveRetryTimer = null;
+    if (saveStatus.value !== "saved" && store.isLogged) {
+      void persistSave();
+    }
+  }, delay);
+};
+
 const persistSave = useDebounceFn(async () => {
   if (!store.isLogged) return;
   saveStatus.value = "saving";
@@ -130,10 +162,17 @@ const persistSave = useDebounceFn(async () => {
       enable: props.widget.enable,
     });
     if (ok) {
+      saveRetryCount = 0;
+      saveStatus.value = "saved";
       pushUpdate();
+    } else {
+      saveStatus.value = "unsaved";
+      scheduleSaveRetry();
     }
+  } catch {
+    saveStatus.value = "unsaved";
+    scheduleSaveRetry();
   } finally {
-    saveStatus.value = "saved";
     scheduleNextPoll();
   }
 }, 500);
@@ -166,13 +205,12 @@ watch(
 onMounted(() => {
   const isEmptyData = !Array.isArray(props.widget.data) || props.widget.data.length === 0;
   const hasBackup = localBackup.value.length > 0;
-  const isRecentClear = Date.now() - lastClearedAt.value < 60000; // 1分钟内的清空操作
-
-  // 只有当：1.数据为空 2.有备份 3.不是最近的主动清空，才恢复备份
-  if (isEmptyData && hasBackup && !isRecentClear) {
-    props.widget.data = localBackup.value;
-    // 立即保存，确保恢复的数据同步到服务端
-    persistSave();
+  // 本地备份只做"离线兜底"：未登录或明确离线、且当前没有服务端数据时才展示，
+  // 并且不再自动 persistSave 回推服务端——否则别处已删空的列表会被本机旧备份
+  // 永久性推回服务端。在线时以服务端为准（下方 pollRemote / socket 同步）。
+  const isOffline = !store.isLogged || !navigator.onLine;
+  if (isEmptyData && hasBackup && isOffline) {
+    props.widget.data = [...localBackup.value];
   }
   if (store.isLogged && !shouldUseSocket.value) {
     void pollRemote(true);
@@ -181,6 +219,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling();
+  if (saveRetryTimer) {
+    clearTimeout(saveRetryTimer);
+    saveRetryTimer = null;
+  }
 });
 
 const handleSave = () => {
@@ -279,8 +321,8 @@ const handleScrollIsolation = (e: WheelEvent) => {
       <div v-for="(item, idx) in todoItems" :key="item.id" class="flex items-start gap-2 group">
         <input
           type="checkbox"
-          v-model="item.done"
-          @change="handleSave"
+          :checked="item.done"
+          @change="toggleDone(item.id, idx)"
           class="rounded text-white focus:ring-0 cursor-pointer mt-0.5"
         />
         <span

@@ -25,6 +25,7 @@ var socketServer *socketio.Server
 type getDataCacheEntry struct {
 	dataMod    time.Time
 	sysMod     time.Time
+	memoVer    int64
 	response   map[string]interface{}
 	accessTime time.Time
 }
@@ -34,6 +35,43 @@ var getDataCacheMu sync.RWMutex
 var memoFileMu sync.Mutex
 var memoSaveIdempotencyCache = map[string]memoSaveIdempotencyEntry{}
 var memoSaveIdempotencyMu sync.Mutex
+
+// memoDataVersion 按用户记录 memo 文件的变更代数。
+// SaveMemo 只写 memo_*.json、不改 data.json 的 mtime，而 /api/data 的缓存与
+// ETag 原来只看 data.json mtime → memo 变更后其他标签页/设备在缓存有效期内
+// 一直读到旧内容、ETag 不变还返回 304（"缓存导致复活"）。把它并入 ETag 与
+// 缓存键后，任何 memo 变更都会立即使缓存失效。
+var memoDataVersion = map[string]int64{}
+var memoDataVersionMu sync.RWMutex
+
+func bumpMemoDataVersion(username string) int64 {
+	memoDataVersionMu.Lock()
+	defer memoDataVersionMu.Unlock()
+	memoDataVersion[username]++
+	return memoDataVersion[username]
+}
+
+func getMemoDataVersion(username string) int64 {
+	memoDataVersionMu.RLock()
+	defer memoDataVersionMu.RUnlock()
+	return memoDataVersion[username]
+}
+
+// userDataFileLocks 给每个用户数据文件一把互斥锁，
+// 避免SaveData / SaveSingleWidget / ResetData 的"读-改-写"交错丢更新。
+var userDataFileLocks = map[string]*sync.Mutex{}
+var userDataFileLocksMu sync.Mutex
+
+func lockUserDataFile(path string) *sync.Mutex {
+	userDataFileLocksMu.Lock()
+	defer userDataFileLocksMu.Unlock()
+	if m, ok := userDataFileLocks[path]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	userDataFileLocks[path] = m
+	return m
+}
 
 const maxCacheEntries = 20
 
@@ -267,15 +305,16 @@ func latestModTime(a, b time.Time) time.Time {
 	return b
 }
 
-func buildGetDataETag(username, userFile string, isGuest bool, dataMod, sysMod time.Time, dataSize int64) string {
+func buildGetDataETag(username, userFile string, isGuest bool, dataMod, sysMod time.Time, dataSize int64, memoVer int64) string {
 	payload := fmt.Sprintf(
-		"%s|%s|%t|%d|%d|%d",
+		"%s|%s|%t|%d|%d|%d|%d",
 		username,
 		userFile,
 		isGuest,
 		dataMod.UnixNano(),
 		sysMod.UnixNano(),
 		dataSize,
+		memoVer,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("\"%x\"", sum[:])
@@ -348,9 +387,10 @@ func GetData(c *gin.Context) {
 		dataMod = userInfo.ModTime()
 		dataSize = userInfo.Size()
 	}
+	memoVer := getMemoDataVersion(username)
 	etag := ""
 	if userStatErr == nil {
-		etag = buildGetDataETag(username, userFile, isGuest, dataMod, sysMod, dataSize)
+		etag = buildGetDataETag(username, userFile, isGuest, dataMod, sysMod, dataSize, memoVer)
 	}
 	setGetDataCacheHeaders(c, etag, dataMod, sysMod)
 	if requestHasMatchingETag(c, etag) {
@@ -368,7 +408,7 @@ func GetData(c *gin.Context) {
 		getDataCacheMu.RLock()
 		entry, ok := getDataCache[cacheKey]
 		getDataCacheMu.RUnlock()
-		if ok && entry.dataMod.Equal(dataMod) && entry.sysMod.Equal(sysMod) {
+		if ok && entry.dataMod.Equal(dataMod) && entry.sysMod.Equal(sysMod) && entry.memoVer == memoVer {
 			getDataCacheMu.Lock()
 			entry.accessTime = time.Now()
 			getDataCache[cacheKey] = entry
@@ -395,7 +435,7 @@ func GetData(c *gin.Context) {
 			if refreshedInfo, statErr := os.Stat(userFile); statErr == nil {
 				dataMod = refreshedInfo.ModTime()
 				dataSize = refreshedInfo.Size()
-				etag = buildGetDataETag(username, userFile, isGuest, dataMod, sysMod, dataSize)
+				etag = buildGetDataETag(username, userFile, isGuest, dataMod, sysMod, dataSize, memoVer)
 				setGetDataCacheHeaders(c, etag, dataMod, sysMod)
 			}
 		}
@@ -546,7 +586,8 @@ func GetVersion(c *gin.Context) {
 func GetWidget(c *gin.Context) {
 	username := c.GetString("username")
 	if username == "" {
-		username = "admin"
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
 	}
 
 	sysConfig := getCachedSystemConfig()
@@ -820,6 +861,9 @@ func SaveMemo(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save memo"})
 		return
 	}
+	// memo 变更后递增该用户的 memo 代数，使 /api/data 的缓存与 ETag 立即失效，
+	// 否则其他标签页/设备会继续读到旧 memo（并收到 304）。
+	bumpMemoDataVersion(username)
 
 	if socketServer != nil {
 		socketServer.BroadcastToNamespace("/", "memo:updated", map[string]interface{}{
@@ -858,6 +902,12 @@ func SaveData(c *gin.Context) {
 	if username == "admin" && sysConfig.AuthMode == "single" {
 		userFile = filepath.Join(config.DataDir, "data.json")
 	}
+
+	// 全程持该用户数据文件的锁：读-改-写必须原子化，
+	// 否则与 SaveSingleWidget / ResetData 交错会互相丢更新。
+	userFileLock := lockUserDataFile(userFile)
+	userFileLock.Lock()
+	defer userFileLock.Unlock()
 
 	// 2. Read existing data to map to preserve EVERYTHING in file
 	var existingData map[string]interface{}
@@ -1020,6 +1070,10 @@ func ResetData(c *gin.Context) {
 		userFile = filepath.Join(config.DataDir, "data.json")
 	}
 
+	userFileLock := lockUserDataFile(userFile)
+	userFileLock.Lock()
+	defer userFileLock.Unlock()
+
 	// Read current data to preserve password/username
 	var currentData map[string]interface{}
 	utils.ReadJSON(userFile, &currentData)
@@ -1048,6 +1102,25 @@ func ResetData(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset data"})
 		return
 	}
+
+	// 重置后清理该用户的 memo 文件并递增 memo 代数：
+	// 否则旧备忘会从 memo_*.json 复活（GetData 会把 memo 文件内容对齐回 widget），
+	// 且 /api/data 缓存不失效导致其他端继续读旧数据。
+	memoPrefix := "memo_" + sanitizeMemoID(username) + "_"
+	if entries, err := os.ReadDir(config.DataDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasPrefix(name, memoPrefix) && strings.HasSuffix(name, ".json") {
+				if err := os.Remove(filepath.Join(config.DataDir, name)); err != nil {
+					log.Printf("ResetData 清理 memo 文件失败 user=%s file=%s err=%v", username, name, err)
+				}
+			}
+		}
+	}
+	bumpMemoDataVersion(username)
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }

@@ -195,7 +195,13 @@ export const useWidgetsStore = defineStore("widgets", () => {
         if (w && typeof serverWidgetVersion === "number") {
           (w as unknown as Record<string, unknown>)["widgetVersion"] = serverWidgetVersion;
         }
-        const retryBody = { ...payload, version: dataVersion.value, widgetVersion: typeof serverWidgetVersion === "number" ? serverWidgetVersion + 1 : widgetVersion + 1 };
+        // 服务端要求 widgetVersion 与当前值**相等**才放行（乐观锁比对），
+        // 之前发 serverWidgetVersion + 1 永远不相等 → 重试必失败，
+        // 一旦冲突这个 widget 就持续静默保存失败。这里改用 409 返回的
+        // 服务端当前值重试一次。
+        const retryWidgetVersion =
+          typeof serverWidgetVersion === "number" ? serverWidgetVersion : widgetVersion;
+        const retryBody = { ...payload, version: dataVersion.value, widgetVersion: retryWidgetVersion };
         const retry = await fetch(`/api/widgets/${encodeURIComponent(widgetId)}`, {
           method: "PUT",
           headers: { ...getHeaders(), "Content-Type": "application/json" },
