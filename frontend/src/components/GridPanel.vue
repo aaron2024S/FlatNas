@@ -21,6 +21,7 @@ import { useDevice } from "../composables/useDevice";
 import { generateLayout, type GridLayoutItem } from "../utils/gridLayout";
 import type { NavItem, WidgetConfig, NavGroup } from "@/types";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
+import IpAddressLine from "@/components/base/IpAddressLine.vue";
 import { isInternalNetwork, getNetworkConfig, computeEffectiveNetworkMode } from "@/utils/network";
 import { computeMenuPlacement } from "@/utils/menuPosition";
 import DOMPurify from "dompurify";
@@ -2814,12 +2815,15 @@ const clientIpIsInternal = computed(() => {
 const clientIpLabel = computed(() => (clientIpIsInternal.value ? "内网" : "外网"));
 
 const copiedToast = ref("");
+// 「已复制」是卡片内的浮层，多张卡片同时存在时只该出现在被点的那一张上
+const copiedToastWidgetId = ref<string | null>(null);
 let copiedToastTimer: number | null = null;
-const copyToClipboard = async (text: string) => {
+const copyToClipboard = async (text: string, widgetId?: string) => {
   const value = String(text || "").trim();
   if (!value) return;
   if (value === "加载中..." || value === "检测中..." || value === "Error")
     return;
+  copiedToastWidgetId.value = widgetId ?? null;
   try {
     await navigator.clipboard.writeText(value);
     copiedToast.value = "已复制";
@@ -2843,6 +2847,7 @@ const copyToClipboard = async (text: string) => {
   if (copiedToastTimer) window.clearTimeout(copiedToastTimer);
   copiedToastTimer = window.setTimeout(() => {
     copiedToast.value = "";
+    copiedToastWidgetId.value = null;
     copiedToastTimer = null;
   }, 1200);
 };
@@ -3777,7 +3782,7 @@ onUnmounted(() => {
             </div>
             <div
               v-else-if="widget.type === 'ip'"
-              class="w-full h-full p-3 rounded-2xl backdrop-blur border border-white/10 flex flex-col items-center transition-colors text-center text-white"
+              class="w-full h-full p-3 rounded-2xl backdrop-blur border border-white/10 flex flex-col items-center relative transition-colors text-center text-white"
               :style="{
                 backgroundColor: `rgba(0,0,0,${Math.min(0.85, Math.max(0.15, widget.opacity ?? 0.35))})`,
                 color: '#fff',
@@ -3790,27 +3795,24 @@ onUnmounted(() => {
               >
                 {{ formattedLocation }}
               </div>
-              <div v-if="hasWanIp" class="flex items-center justify-center gap-2 w-full flex-1">
-                <span class="text-[12px] opacity-70 uppercase">外网</span>
-                <button
-                  class="max-w-full font-mono font-medium sm:font-bold leading-tight text-center select-text break-all hover:opacity-90 transition-opacity text-xl"
-                  type="button"
-                  title="点击复制外网 IP"
-                  @click.stop="copyToClipboard(ipInfo.wanIp)"
-                >
-                  {{ ipInfo.wanIp }}
-                </button>
+              <div v-if="hasWanIp" class="flex w-full flex-1 items-center">
+                <IpAddressLine
+                  label="外网"
+                  :value="ipInfo.wanIp"
+                  :base-font-size="20"
+                  :label-font-size="12"
+                  @copy="(value: string) => copyToClipboard(value, widget.id)"
+                />
               </div>
-              <div v-if="hasLanIp && showClientIp" class="flex items-center justify-center gap-2 w-full flex-1">
-                <span class="text-[10px] opacity-50 uppercase">{{ clientIpLabel }}</span>
-                <button
-                  class="max-w-full font-mono font-medium leading-tight text-center select-text break-all opacity-70 hover:opacity-90 transition-opacity text-sm"
-                  type="button"
-                  :title="`点击复制${clientIpLabel} IP`"
-                  @click.stop="copyToClipboard(ipInfo.lanIp)"
-                >
-                  {{ ipInfo.lanIp }}
-                </button>
+              <div v-if="hasLanIp && showClientIp" class="flex w-full flex-1 items-center">
+                <IpAddressLine
+                  :label="clientIpLabel"
+                  :value="ipInfo.lanIp"
+                  :base-font-size="14"
+                  :label-font-size="10"
+                  muted
+                  @copy="(value: string) => copyToClipboard(value, widget.id)"
+                />
               </div>
               <div v-if="!hasWanIp && !hasLanIp" class="flex items-center justify-center gap-2 w-full flex-1">
                 <span class="text-2xl font-mono opacity-60">{{ displayIp }}</span>
@@ -3831,8 +3833,13 @@ onUnmounted(() => {
                 </button>
               </div>
 
-              <div v-if="copiedToast" class="text-[11px] opacity-80 -mt-1">
-                {{ copiedToast }}
+              <div
+                v-if="copiedToast && copiedToastWidgetId === widget.id"
+                class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center"
+              >
+                <span class="rounded-full bg-black/60 px-2 py-0.5 text-[10px] leading-none text-white">
+                  {{ copiedToast }}
+                </span>
               </div>
             </div>
             <CountdownWidget v-else-if="widget.type === 'countdown'" :widget="widget" />
