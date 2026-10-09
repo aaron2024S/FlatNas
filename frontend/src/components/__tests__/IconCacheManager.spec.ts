@@ -300,3 +300,43 @@ describe("IconCacheManager 上传", () => {
     expect(calls.filter((c) => c.url === "/api/icon-cache/list").length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("IconCacheManager 悬浮操作栏（回归保护）", () => {
+  /** 缩略图容器（棋盘格那块）—— 悬浮操作栏就挂在它里面 */
+  const thumbBox = (wrapper: VueWrapper) =>
+    cardByName(wrapper, "used.webp").element.children[0] as HTMLElement;
+
+  /** 操作栏（包着 复制/信息/删除 的那条） */
+  const actionBar = (wrapper: VueWrapper) => {
+    const del = [...cardByName(wrapper, "used.webp").element.querySelectorAll("button")].find(
+      (b) => (b.textContent || "").trim() === "删除",
+    );
+    return del!.parentElement as HTMLElement;
+  };
+
+  it("缩略图容器必须有 overflow-hidden —— 否则 translate-y-full 藏不住操作栏，会压住底部信息", async () => {
+    // 操作栏靠 translate-y-full 往下挪一行来"藏起来"，只有父级裁剪才真的看不见；
+    // 少了它，操作栏会正好盖在文件名/体积上（真机实测压掉 29.5/44.5px）。
+    const wrapper = await mountManager();
+    expect(thumbBox(wrapper).className).toContain("overflow-hidden");
+  });
+
+  it("操作栏静止态是 opacity-0 + pointer-events-none，且绝不能用 visibility:hidden", async () => {
+    const wrapper = await mountManager();
+    const bar = actionBar(wrapper);
+    const cls = bar.className;
+    const tokens = cls.split(/\s+/).filter(Boolean);
+
+    expect(tokens).toContain("translate-y-full");
+    expect(tokens).toContain("opacity-0");
+    expect(tokens).toContain("pointer-events-none");
+    // 悬浮时显形
+    expect(tokens).toContain("group-hover:translate-y-0");
+    expect(tokens).toContain("group-hover:opacity-100");
+    expect(tokens).toContain("group-focus-within:opacity-100");
+    // 🚨 反向约束：visibility:hidden 的元素无法获得焦点，用它就等于把这三个按钮
+    // 从键盘操作里删掉（group-focus-within 也永远不会触发）。
+    expect(tokens).not.toContain("invisible");
+    expect(tokens).not.toContain("hidden");
+  });
+});

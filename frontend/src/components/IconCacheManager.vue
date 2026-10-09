@@ -510,7 +510,9 @@ onMounted(fetchList);
         class="group relative rounded-xl border bg-white overflow-hidden transition-all hover:shadow-md"
         :class="isSelected(file.name) ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200 hover:border-blue-300'"
       >
-        <div class="relative aspect-square flex items-center justify-center" :style="checkerboardStyle">
+        <!-- overflow-hidden 是必需的：下面那条悬浮操作栏靠 translate-y-full 藏在缩略图下方，
+             不裁剪的话它只是"往下挪了一行"，正好压在底部的文件名/体积上（实测压掉 29.5/44.5px） -->
+        <div class="relative aspect-square overflow-hidden flex items-center justify-center" :style="checkerboardStyle">
           <img
             :src="store.getAssetUrl(file.path)"
             class="max-w-[64%] max-h-[64%] object-contain"
@@ -535,9 +537,16 @@ onMounted(fetchList);
             @change="toggleSelect(file.name)"
           />
 
-          <!-- 悬浮操作 -->
+          <!-- 悬浮操作：静止态用 translate-y-full 藏到缩略图下方，靠父级 overflow-hidden 裁掉。
+               这里刻意**不用 `invisible`/`visibility:hidden`** —— 那会让按钮无法获得焦点，
+               键盘用户就彻底用不了这三个操作了。改用 opacity-0 + pointer-events-none：
+               对鼠标不可见也不可点，但仍在 Tab 顺序里；键盘聚焦进来时由
+               group-focus-within 显形（同时把 translate 归零，从缩略图下方滑出来）。 -->
           <div
-            class="absolute inset-x-0 bottom-0 flex translate-y-full group-hover:translate-y-0 transition-transform bg-white/95 backdrop-blur border-t border-gray-100"
+            class="absolute inset-x-0 bottom-0 flex translate-y-full opacity-0 pointer-events-none transition
+                   group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto
+                   group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto
+                   bg-white/95 backdrop-blur border-t border-gray-100"
           >
             <button
               class="flex-1 py-1.5 text-[11px] whitespace-nowrap text-gray-600 hover:bg-gray-100 transition-colors"
