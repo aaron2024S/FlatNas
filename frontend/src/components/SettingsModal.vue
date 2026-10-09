@@ -13,6 +13,7 @@ import RssSettings from "./RssSettings.vue";
 import SearchSettings from "./SearchSettings.vue";
 import ScriptManager from "./ScriptManager.vue";
 import MarketplaceModal from "./MarketplaceModal.vue";
+import IconCacheManager from "./IconCacheManager.vue";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
 import { DEFAULT_NETWORK_RULES, NETWORK_PRESET_RULES } from "@/utils/network";
 import { createDefaultWidgetList } from "@/utils/widgetUtils";
@@ -300,6 +301,7 @@ type SettingsTab =
   | "universal-window"
   | "docker"
   | "account"
+  | "icon-cache"
   | "network"
   | "lucky-stun"
   | "about";
@@ -2022,6 +2024,18 @@ watch(activeTab, (val) => {
             账户管理
           </button>
           <button
+            @click="activeTab = 'icon-cache'"
+            :class="
+              activeTab === 'icon-cache'
+                ? 'settings-nav-selected'
+                : 'settings-nav-idle'
+            "
+            class="whitespace-nowrap md:whitespace-normal w-auto md:w-full shrink-0 text-left flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors"
+          >
+            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" /></svg>
+            图标缓存
+          </button>
+          <button
             @click="activeTab = 'network'"
             :class="[
               'px-3 py-2.5 text-sm transition-colors text-left flex items-center gap-2',
@@ -3733,6 +3747,15 @@ watch(activeTab, (val) => {
                 </div>
               </div>
             </template>
+          </div>
+
+          <div v-if="isTab('icon-cache')" class="p-4">
+            <div class="flex items-center gap-3 mb-4">
+              <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
+                图标缓存管理
+              </h4>
+            </div>
+            <IconCacheManager />
           </div>
 
           <div v-if="isTab('network')" class="p-4 space-y-4">

@@ -25,13 +25,13 @@ export const useConfigStore = defineStore("config", () => {
   const serverSyncLockCount = ref(0);
 
   // Version / update checking
-  const currentVersion = "1.2.7";
+  const currentVersion = "1.2.8";
   const latestVersion = ref("");
   const dockerUpdateAvailable = ref(false);
   const updateCheckLastAt = useStorage<number>("flat-nas-update-check-last-at", 0);
   const UPDATE_CHECK_TTL = 30 * 60 * 1000;
 
-  // 把 "1.2.7" / "v1.2.7" / "1.2.7-beta.1" 这类版本串拆成数字数组，用于真正的大小比较
+  // 把 "1.2.8" / "v1.2.8" / "1.2.8-beta.1" 这类版本串拆成数字数组，用于真正的大小比较
   const parseVersion = (raw: string): number[] =>
     String(raw)
       .trim()

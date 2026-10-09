@@ -5,6 +5,7 @@ import { useSmartIconMatch } from "@/composables/useSmartIconMatch";
 import { useMainStore } from "../stores/main";
 import IconUploader from "./IconUploader.vue";
 import IconSelectionModal from "./IconSelectionModal.vue";
+import IconLibraryPicker from "./IconLibraryPicker.vue";
 import GroupSelector from "./GroupSelector.vue";
 import OverlayMotion from "@/components/base/OverlayMotion.vue";
 import { VueCropper } from "vue-cropper";
@@ -64,6 +65,9 @@ const showIconSelection = ref(false);
 const iconCandidates = shallowRef<string[]>([]);
 const searchSource = ref<"local" | "api">("api");
 
+// 「从图标库选择」：浏览已经缓存到服务器的图标
+const showIconLibrary = ref(false);
+
 // 辅助函数：从 URL 提取图标名称
 const getIconNameFromUrl = (url: string): string => {
   try {
@@ -107,6 +111,11 @@ const form = ref<EditForm>({
 // 选中图标
 const onIconSelect = (icon: string) => {
   form.value.icon = icon;
+};
+
+// 从图标库（已上传/已缓存）里选中一个：拿到的就是本地路径，无需再缓存
+const onIconLibrarySelect = (path: string) => {
+  form.value.icon = path;
 };
 
 const {
@@ -880,16 +889,29 @@ const submit = async () => {
             </div>
           </div>
 
-          <!-- 图标 URL 输入 -->
-          <div class="relative">
-            <input
-              v-model="form.icon"
-              type="text"
-              placeholder="图片 URL 地址..."
-              class="w-full px-4 py-2 rounded-lg border border-gray-200 text-sm focus:border-gray-900 outline-none"
-              @focus="iconInputFocused = true"
-              @blur="onIconInputBlur"
-            />
+          <!-- 图标 URL 输入 + 从图标库选择 -->
+          <div class="flex items-stretch gap-2">
+            <div class="relative flex-1 min-w-0">
+              <input
+                v-model="form.icon"
+                type="text"
+                placeholder="图片 URL 地址..."
+                class="w-full px-4 py-2 rounded-lg border border-gray-200 text-sm focus:border-gray-900 outline-none"
+                @focus="iconInputFocused = true"
+                @blur="onIconInputBlur"
+              />
+            </div>
+            <button
+              type="button"
+              class="shrink-0 px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors flex items-center gap-1"
+              title="浏览已上传的图标"
+              @click="showIconLibrary = true"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
+              </svg>
+              图标库
+            </button>
           </div>
 
           <input
@@ -1009,6 +1031,13 @@ const submit = async () => {
       :source="searchSource"
       @select="onIconSelect"
       @cancel-link="showIconSelection = false"
+    />
+
+    <!-- 从图标库（已上传/已缓存）选择 -->
+    <IconLibraryPicker
+      v-model:show="showIconLibrary"
+      :title="`为「${form.title || '新项目'}」选择图标`"
+      @select="onIconLibrarySelect"
     />
 
     <!-- Icon Cropper Modal -->

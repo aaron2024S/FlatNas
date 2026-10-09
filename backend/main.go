@@ -345,6 +345,12 @@ func main() {
 			authorized.POST("/wallpaper/resolve", handlers.ResolveWallpaper)
 			authorized.POST("/wallpaper/fetch", handlers.FetchWallpaper)
 
+			// Icon Cache Management（列表 / 单删 / 批删 / 清理未引用）
+			authorized.GET("/icon-cache/list", handlers.ListIconCache)
+			authorized.DELETE("/icon-cache/:name", handlers.DeleteIconCache)
+			authorized.POST("/icon-cache/batch-delete", handlers.BatchDeleteIconCache)
+			authorized.POST("/icon-cache/cleanup", handlers.CleanupIconCache)
+
 			// Backgrounds Management
 			authorized.DELETE("/backgrounds/:name", handlers.DeleteBackground)
 			authorized.DELETE("/mobile_backgrounds/:name", handlers.DeleteMobileBackground)
