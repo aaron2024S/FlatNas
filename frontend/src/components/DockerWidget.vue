@@ -1122,8 +1122,7 @@ const getStatusColor = (state: string) => {
            首页卡片（非 compact）仍走下面的原卡片列表，窄屏放不下表格。 -->
       <div v-if="props.compact" class="flex-1 flex flex-col overflow-hidden min-h-0 pt-1">
         <div
-          class="grid items-center gap-3 px-3 py-2 rounded-t-xl bg-gray-100/80 text-xs font-bold text-gray-600"
-          style="grid-template-columns: minmax(0, 2.2fr) 88px minmax(0, 1.3fr) minmax(0, 250px)"
+          class="dw-compact-head grid items-center gap-3 px-3 py-2 rounded-t-xl bg-gray-100/80 text-xs font-bold text-gray-600"
         >
           <span>容器名称</span>
           <span>状态</span>
@@ -1134,11 +1133,10 @@ const getStatusColor = (state: string) => {
           <div
             v-for="c in containers"
             :key="c.Id"
-            class="grid items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/60 transition-colors"
-            style="grid-template-columns: minmax(0, 2.2fr) 88px minmax(0, 1.3fr) minmax(0, 250px)"
+            class="dw-compact-grid grid items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/60 transition-colors"
           >
             <!-- 容器名称 + 镜像 + 内网地址 -->
-            <div class="min-w-0">
+            <div class="dw-cell-name min-w-0">
               <div class="flex items-center min-w-0">
                 <span class="text-sm font-medium text-gray-900 truncate" :title="c.Names?.[0] || ''">
                   {{ (c.Names?.[0] || "").replace(/^\//, "") }}
@@ -1162,7 +1160,7 @@ const getStatusColor = (state: string) => {
             </div>
 
             <!-- 状态徽章 -->
-            <div>
+            <div class="dw-cell-status">
               <span
                 v-if="c.State === 'running'"
                 class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-green-50 text-green-600 text-xs"
@@ -1178,7 +1176,7 @@ const getStatusColor = (state: string) => {
             </div>
 
             <!-- 资源概览：CPU / RAM 两行纯文字（参考图无进度条） -->
-            <div class="text-xs font-mono text-gray-700 leading-5">
+            <div class="dw-cell-metrics text-xs font-mono text-gray-700 leading-5">
               <div>
                 CPU:
                 <span v-if="c.stats">{{ c.stats.cpuPercent.toFixed(1) }}%</span>
@@ -1192,7 +1190,7 @@ const getStatusColor = (state: string) => {
             </div>
 
             <!-- 操作：启停开关 / 重启 / +卡片 / 禁止升级 -->
-            <div class="flex items-center justify-end gap-2">
+            <div class="dw-cell-actions flex items-center justify-end gap-2">
               <label
                 class="relative inline-flex items-center cursor-pointer shrink-0"
                 :title="c.State === 'running' ? '点击停止容器' : '点击启动容器'"
@@ -1461,5 +1459,50 @@ const getStatusColor = (state: string) => {
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #d1d5db;
+}
+
+/* 设置页"紧凑模式"表格（props.compact）的四列栅格。
+   原先是直接写在模板上的内联 style —— 内联样式的优先级压过媒体查询，
+   在手机上没法切换布局，所以提取成类名。 */
+.dw-compact-head,
+.dw-compact-grid {
+  grid-template-columns: minmax(0, 2.2fr) 88px minmax(0, 1.3fr) minmax(0, 250px);
+}
+
+/* 手机端：四列表格的最小需求宽度约 400px（固定列 88 + 250、列间距 36、内边距 24），
+   而手机内容区只有"视口宽 − 48px"，根本放不下。此时 minmax(0, …) 的弹性列
+   会被压缩到 0 宽 —— 容器名称和 CPU/内存直接消失（实测 320/375px 下均为 0px）。
+   故窄屏改为卡片式纵向排布：名称 + 状态一行，资源一行，操作一行。 */
+@media (max-width: 639.98px) {
+  /* 列结构已变，表头失去意义 */
+  .dw-compact-head {
+    display: none;
+  }
+  .dw-compact-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name status"
+      "metrics metrics"
+      "actions actions";
+    row-gap: 8px;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+  .dw-cell-name {
+    grid-area: name;
+  }
+  .dw-cell-status {
+    grid-area: status;
+    align-self: center;
+  }
+  .dw-cell-metrics {
+    grid-area: metrics;
+  }
+  /* 操作区按钮多，靠左排并允许换行，避免在窄屏被挤出可视区 */
+  .dw-cell-actions {
+    grid-area: actions;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
 </style>

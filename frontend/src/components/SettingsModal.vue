@@ -2977,7 +2977,7 @@ watch(activeTab, (val) => {
           </div>
 
           <div v-if="activeTab === 'docker'" class="space-y-4">
-            <div class="flex items-center justify-between mb-4 mr-8">
+            <div class="flex flex-wrap items-center justify-between gap-y-2 mb-4 mr-8 max-sm:mr-0">
               <h4 class="text-base font-bold text-gray-900 border-l-4 border-gray-900 pl-3">
                 Docker 管理 (内测中)
               </h4>
@@ -3006,7 +3006,7 @@ watch(activeTab, (val) => {
               <!-- 第一行：宿主机状态栏 + 总开关；开关打开后，在其右侧显示 手机端显示 -->
               <div class="flex flex-wrap items-center gap-y-2">
                 <!-- 左侧标题块定宽：与下一行 Docker 服务的标题块同宽，使两行“公开访问”左边缘对齐 -->
-                <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                <div class="flex items-center gap-3 min-w-[13rem] shrink-0 max-sm:min-w-0">
                   <div class="text-sm font-bold text-gray-900">宿主机状态栏</div>
                   <label class="relative inline-flex items-center cursor-pointer shrink-0">
                     <input
@@ -3056,8 +3056,8 @@ watch(activeTab, (val) => {
             <div class="space-y-4">
               <!-- 未启用时的提示 -->
               <template v-if="!isDockerComponentCreated">
-                <div class="flex items-center">
-                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                <div class="flex flex-wrap items-center gap-y-2">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0 max-sm:min-w-0">
                     <div class="text-sm font-bold text-gray-900">Docker 服务</div>
                     <label class="relative inline-flex items-center cursor-pointer shrink-0">
                       <input
@@ -3085,8 +3085,8 @@ watch(activeTab, (val) => {
               <!-- 已启用后的管理区 -->
               <template v-else>
                 <!-- 主控制区 -->
-                <div class="flex items-center">
-                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                <div class="flex flex-wrap items-center gap-y-2">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0 max-sm:min-w-0">
                     <div class="text-sm font-bold text-gray-900">Docker 服务</div>
                     <label class="relative inline-flex items-center cursor-pointer shrink-0">
                       <input
@@ -3103,7 +3103,7 @@ watch(activeTab, (val) => {
                     </label>
                   </div>
                   <!-- 内网主机（显示在 Docker 服务开关右侧） -->
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-2 max-sm:w-full">
                     <span class="text-xs text-gray-700 font-medium">内网主机</span>
                     <input
                       :value="dockerWidget?.data?.lanHost"
@@ -3116,7 +3116,7 @@ watch(activeTab, (val) => {
                       "
                       type="text"
                       placeholder="例如：192.168.1.10"
-                      class="px-2 py-1 border border-gray-200 rounded text-xs focus:border-gray-900 outline-none"
+                      class="px-2 py-1 border border-gray-200 rounded text-xs focus:border-gray-900 outline-none max-sm:flex-1 max-sm:min-w-0"
                     />
                   </div>
                   <!-- Docker 服务行只保留总开关；公开访问/手机端显示移到下面"容器管理组件"行 -->
@@ -3213,7 +3213,7 @@ watch(activeTab, (val) => {
                 <!-- 容器管理组件行（照 sun-panel 样式）：组件开关 + 公开访问/手机端显示，
                      三者控制的都是 DockerWidget 本体（enable/isPublic/hideOnMobile） -->
                 <div class="flex flex-wrap items-center gap-y-2 border-t border-gray-100 pt-3">
-                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0">
+                  <div class="flex items-center gap-3 min-w-[13rem] shrink-0 max-sm:min-w-0">
                     <div class="text-sm font-bold text-gray-900">容器管理组件</div>
                     <label class="relative inline-flex items-center cursor-pointer shrink-0">
                       <input
@@ -3258,7 +3258,7 @@ watch(activeTab, (val) => {
                 <div class="border-t border-gray-100 pt-3">
                   <div
                     v-if="isDockerSystemEnabled"
-                    class="h-[500px]"
+                    class="h-[500px] max-sm:h-[380px]"
                   >
                     <DockerWidget :widget="dockerWidget" :compact="true" />
                   </div>
