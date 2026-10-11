@@ -1119,10 +1119,18 @@ const getStatusColor = (state: string) => {
 
       <!-- 紧凑模式（设置页 Docker 管理）：参考表格风格
            列：容器名称+镜像 | 状态徽章 | CPU/RAM 概览 | 操作（启停开关 / 重启 / +卡片 / 禁止升级）
-           首页卡片（非 compact）仍走下面的原卡片列表，窄屏放不下表格。 -->
-      <div v-if="props.compact" class="flex-1 flex flex-col overflow-hidden min-h-0 pt-1">
+           首页卡片（非 compact）仍走下面的原卡片列表，窄屏放不下表格。
+           边框/分割线（整体压在最淡的一档，避免抢眼）：
+             列表外框 #E5E7EB(gray-200) / 表头底 #F9FAFB(gray-50)
+             表头下线 #E5E7EB / 行分割线 #EEF0F3（末行不画线，否则与外框底边成双线）
+           圆角与外框都交给这层容器（overflow-hidden 负责裁圆角），
+           表头自身不再带 rounded-t-xl。 -->
+      <div
+        v-if="props.compact"
+        class="dw-compact-table flex-1 flex flex-col overflow-hidden min-h-0 mt-1 border border-gray-200 rounded-xl"
+      >
         <div
-          class="dw-compact-head grid items-center gap-3 px-3 py-2 rounded-t-xl bg-gray-100/80 text-xs font-bold text-gray-600"
+          class="dw-compact-head grid items-center gap-3 px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-bold text-gray-600"
         >
           <span>容器名称</span>
           <span>状态</span>
@@ -1133,7 +1141,7 @@ const getStatusColor = (state: string) => {
           <div
             v-for="c in containers"
             :key="c.Id"
-            class="dw-compact-grid grid items-center gap-3 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50/60 transition-colors"
+            class="dw-compact-grid grid items-center gap-3 px-3 py-2.5 border-b border-[#EEF0F3] last:border-b-0 hover:bg-gray-50/60 transition-colors"
           >
             <!-- 容器名称 + 镜像 + 内网地址 -->
             <div class="dw-cell-name min-w-0">
